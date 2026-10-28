@@ -21,6 +21,9 @@ spring:
     init:
       mode: always
       platform: h2
+  # 테스트는 외부 인프라(Redis) 없이 실행되도록 인메모리 캐시 사용
+  cache:
+    type: simple
 
 logging:
   level:

@@ -37,6 +37,7 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.test.util.ReflectionTestUtils;
 
 @ExtendWith(MockitoExtension.class)
@@ -59,6 +60,9 @@ class BasicChannelServiceTest {
 
   @Mock
   private ChannelMapper channelMapper;
+
+  @Mock
+  private ApplicationEventPublisher applicationEventPublisher;
 
   @InjectMocks
   private BasicChannelService channelService;

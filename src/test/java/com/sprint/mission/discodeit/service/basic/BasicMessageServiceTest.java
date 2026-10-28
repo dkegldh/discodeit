@@ -22,8 +22,10 @@ import com.sprint.mission.discodeit.exception.channel.ChannelNotFoundException;
 import com.sprint.mission.discodeit.exception.message.MessageNotFoundException;
 import com.sprint.mission.discodeit.exception.user.UserNotFoundException;
 import com.sprint.mission.discodeit.mapper.MessageMapper;
+import com.sprint.mission.discodeit.mapper.PageResponseMapper;
 import com.sprint.mission.discodeit.repository.BinaryContentRepository;
 import com.sprint.mission.discodeit.repository.ChannelRepository;
+import com.sprint.mission.discodeit.repository.MessageAttachmentRepository;
 import com.sprint.mission.discodeit.repository.MessageRepository;
 import com.sprint.mission.discodeit.repository.UserRepository;
 import java.time.Instant;
@@ -64,6 +66,12 @@ class BasicMessageServiceTest {
 
   @Mock
   private MessageMapper messageMapper;
+
+  @Mock
+  private MessageAttachmentRepository messageAttachmentRepository;
+
+  @Mock
+  private PageResponseMapper pageResponseMapper;
 
   @InjectMocks
   private BasicMessageService messageService;

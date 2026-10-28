@@ -5,7 +5,12 @@ on:
     branches: [ release ]
 
 jobs:
+  test:
+    uses: ./.github/workflows/test.yml
+    secrets: inherit
+
   build-and-push:
+    needs: test
     runs-on: ubuntu-latest
 
     steps:

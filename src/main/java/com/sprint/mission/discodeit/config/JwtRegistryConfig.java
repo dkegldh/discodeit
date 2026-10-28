@@ -15,7 +15,7 @@ import org.springframework.data.redis.core.RedisTemplate;
 public class JwtRegistryConfig {
 
   @Bean
-  @Profile("dev")
+  @Profile("!prod")
   public JwtRegistry inMemoryJwtRegistry(
       @Value("${discodeit.security.jwt.max-active-count}") int maxActiveJwtCount,
       ApplicationEventPublisher eventPublisher
