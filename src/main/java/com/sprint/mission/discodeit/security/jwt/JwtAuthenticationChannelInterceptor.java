@@ -19,7 +19,7 @@ import org.springframework.util.StringUtils;
 public class JwtAuthenticationChannelInterceptor implements ChannelInterceptor {
 
   private static final String AUTHORIZATION_HEADER = "Authorization";
-  private static final String BEARER_PREFIX = "Bearer";
+  private static final String BEARER_PREFIX = "Bearer ";
 
   private final JwtTokenProvider jwtTokenProvider;
   private final JwtRegistry jwtRegistry;
