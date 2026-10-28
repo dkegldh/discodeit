@@ -1,85 +1,51 @@
 package com.sprint.mission.discodeit.integration;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.awaitility.Awaitility.await;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.multipart;
-import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultHandlers.print;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
-import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import com.sprint.mission.discodeit.dto.user.UserCreateRequest;
 import com.sprint.mission.discodeit.dto.user.UserUpdateRequest;
+import com.sprint.mission.discodeit.entity.BinaryContentStatus;
+import com.sprint.mission.discodeit.entity.Role;
 import com.sprint.mission.discodeit.entity.User;
-import com.sprint.mission.discodeit.repository.UserRepository;
-import jakarta.servlet.http.Cookie;
+import com.sprint.mission.discodeit.repository.BinaryContentRepository;
+import com.sprint.mission.discodeit.storage.BinaryContentStorage;
+import java.time.Duration;
 import java.util.UUID;
 import org.junit.jupiter.api.BeforeEach;
-import org.springframework.security.crypto.password.PasswordEncoder;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
-import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.boot.test.context.SpringBootTest.WebEnvironment;
-import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.mock.web.MockMultipartFile;
-import org.springframework.test.context.ActiveProfiles;
-import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.MvcResult;
-import org.springframework.transaction.annotation.Transactional;
 
-@SpringBootTest(webEnvironment = WebEnvironment.RANDOM_PORT)
-@AutoConfigureMockMvc
-@ActiveProfiles("test")
-@Transactional
-public class UserIntegrationTest {
-
-  private static final String CSRF_COOKIE_NAME = "XSRF-TOKEN";
-  private static final String CSRF_HEADER_NAME = "X-XSRF-TOKEN";
+class UserIntegrationTest extends AbstractIntegrationTest {
 
   @Autowired
-  private MockMvc mockMvc;
+  private BinaryContentRepository binaryContentRepository;
 
   @Autowired
-  private ObjectMapper objectMapper;
-
-  @Autowired
-  private UserRepository userRepository;
-
-  @Autowired
-  private PasswordEncoder passwordEncoder;
+  private BinaryContentStorage binaryContentStorage;
 
   private User savedUser;
   private String accessToken;
-  private String csrfToken;
-  private Cookie csrfCookie;
 
   @BeforeEach
   void setUp() throws Exception {
-    User user = new User("test", "test@test.com", passwordEncoder.encode("password123"), null);
-    savedUser = userRepository.save(user);
+    savedUser = saveUser("test", Role.USER);
+    accessToken = login("test");
+  }
 
-    MvcResult csrfResult = mockMvc.perform(get("/api/auth/csrf-token"))
-        .andExpect(status().isNoContent())
-        .andReturn();
-    csrfCookie = csrfResult.getResponse().getCookie(CSRF_COOKIE_NAME);
-    csrfToken = csrfCookie.getValue();
-
-    MvcResult loginResult = mockMvc.perform(post("/api/auth/login")
-            .param("username", "test")
-            .param("password", "password123")
-            .cookie(csrfCookie)
-            .header(CSRF_HEADER_NAME, csrfToken))
-        .andExpect(status().isOk())
-        .andReturn();
-
-    JsonNode json = objectMapper.readTree(loginResult.getResponse().getContentAsString());
-    accessToken = json.get("accessToken").asText();
+  private MockMultipartFile jsonPart(String name, Object value) throws Exception {
+    return new MockMultipartFile(name, "", MediaType.APPLICATION_JSON_VALUE,
+        objectMapper.writeValueAsBytes(value));
   }
 
   // --- POST ---
@@ -88,14 +54,8 @@ public class UserIntegrationTest {
   void createUser_validRequest_returns201() throws Exception {
     UserCreateRequest request = new UserCreateRequest("newUser", "new@test.com", "password123");
 
-    MockMultipartFile requestPart = new MockMultipartFile(
-        "userCreateRequest", "", MediaType.APPLICATION_JSON_VALUE,
-        objectMapper.writeValueAsBytes(request)
-    );
-
-    mockMvc.perform(multipart("/api/users").file(requestPart)
-            .cookie(csrfCookie)
-            .header(CSRF_HEADER_NAME, csrfToken))
+    mockMvc.perform(multipart("/api/users").file(jsonPart("userCreateRequest", request))
+            .with(csrf()))
         .andDo(print())
         .andExpect(status().isCreated())
         .andExpect(jsonPath("$.username").value("newUser"))
@@ -104,19 +64,37 @@ public class UserIntegrationTest {
   }
 
   @Test
+  @DisplayName("프로필 이미지와 함께 사용자 생성 시, 커밋 이후 비동기로 파일이 저장되고 상태가 SUCCESS로 변경됨")
+  void createUser_withProfile_storesFileAfterCommit() throws Exception {
+    UserCreateRequest request = new UserCreateRequest("newUser", "new@test.com", "password123");
+    MockMultipartFile profile = new MockMultipartFile("profile", "profile.png", "image/png",
+        "image-bytes".getBytes());
+
+    MvcResult result = mockMvc.perform(multipart("/api/users")
+            .file(jsonPart("userCreateRequest", request))
+            .file(profile)
+            .with(csrf()))
+        .andExpect(status().isCreated())
+        .andReturn();
+    UUID profileId = UUID.fromString(objectMapper.readTree(result.getResponse()
+        .getContentAsString()).get("profile").get("id").asText());
+
+    await().atMost(Duration.ofSeconds(5)).untilAsserted(() ->
+        assertThat(binaryContentRepository.findById(profileId))
+            .hasValueSatisfying(content ->
+                assertThat(content.getStatus()).isEqualTo(BinaryContentStatus.SUCCESS)));
+    assertThat(binaryContentStorage.get(profileId).readAllBytes())
+        .isEqualTo("image-bytes".getBytes());
+  }
+
+  @Test
   @DisplayName("중복된 이메일로 사용자 생성 시 409를 반환")
   void createUser_duplicateEmail_returns409() throws Exception {
     UserCreateRequest request = new UserCreateRequest("otherUser", "test@test.com",
         "password123");
 
-    MockMultipartFile requestPart = new MockMultipartFile(
-        "userCreateRequest", "", MediaType.APPLICATION_JSON_VALUE,
-        objectMapper.writeValueAsBytes(request)
-    );
-
-    mockMvc.perform(multipart("/api/users").file(requestPart)
-            .cookie(csrfCookie)
-            .header(CSRF_HEADER_NAME, csrfToken))
+    mockMvc.perform(multipart("/api/users").file(jsonPart("userCreateRequest", request))
+            .with(csrf()))
         .andDo(print())
         .andExpect(status().isConflict())
         .andExpect(jsonPath("$.code").value("EMAIL_EXISTS"));
@@ -126,8 +104,7 @@ public class UserIntegrationTest {
   @Test
   @DisplayName("전체 사용자 조회 시 200과 사용자 목록을 반환")
   void getAllUsers_returns200WithUserList() throws Exception {
-    mockMvc.perform(get("/api/users")
-            .header(HttpHeaders.AUTHORIZATION, "Bearer " + accessToken))
+    mockMvc.perform(get("/api/users").with(auth(accessToken)))
         .andDo(print())
         .andExpect(status().isOk())
         .andExpect(jsonPath("$.length()").value(1))
@@ -140,9 +117,15 @@ public class UserIntegrationTest {
   void getAllUsers_noUsers_return401WhenUserDeleted() throws Exception {
     userRepository.deleteAll();
 
-    mockMvc.perform(get("/api/users")
-            .header(HttpHeaders.AUTHORIZATION, "Bearer " + accessToken))
+    mockMvc.perform(get("/api/users").with(auth(accessToken)))
         .andDo(print())
+        .andExpect(status().isUnauthorized());
+  }
+
+  @Test
+  @DisplayName("토큰 없이 전체 조회 시 401을 반환")
+  void getAllUsers_withoutToken_returns401() throws Exception {
+    mockMvc.perform(get("/api/users"))
         .andExpect(status().isUnauthorized());
   }
 
@@ -150,10 +133,7 @@ public class UserIntegrationTest {
   @Test
   @DisplayName("존재하는 사용자를 삭제 할 경우 204를 반환하고 DB에서도 삭제됨")
   void deleteUser_return204AndDeletedFromDb() throws Exception {
-    mockMvc.perform(delete("/api/users/{id}", savedUser.getId())
-            .header(HttpHeaders.AUTHORIZATION, "Bearer " + accessToken)
-            .cookie(csrfCookie)
-            .header(CSRF_HEADER_NAME, csrfToken))
+    mockMvc.perform(delete("/api/users/{id}", savedUser.getId()).with(auth(accessToken)))
         .andDo(print())
         .andExpect(status().isNoContent());
 
@@ -161,17 +141,15 @@ public class UserIntegrationTest {
   }
 
   @Test
-  @DisplayName("본인이 아닌 다른 사용자를 삭제 시도할 경우 403을 반환")
-  void deleteUser_notFound_returns403() throws Exception {
-    User otherUser = userRepository.save(
-        new User("other", "other@test.com", "password123", null));
+  @DisplayName("본인이 아닌 다른 사용자를 삭제 시도할 경우 403을 반환하고 삭제되지 않음")
+  void deleteUser_otherUser_returns403() throws Exception {
+    User otherUser = saveUser("other", Role.USER);
 
-    mockMvc.perform(delete("/api/users/{id}", otherUser.getId())
-            .header(HttpHeaders.AUTHORIZATION, "Bearer " + accessToken)
-            .cookie(csrfCookie)
-            .header(CSRF_HEADER_NAME, csrfToken))
+    mockMvc.perform(delete("/api/users/{id}", otherUser.getId()).with(auth(accessToken)))
         .andDo(print())
         .andExpect(status().isForbidden());
+
+    assertThat(userRepository.findById(otherUser.getId())).isPresent();
   }
 
   // --- PATCH ---
@@ -180,16 +158,9 @@ public class UserIntegrationTest {
   void updateUser_returns200() throws Exception {
     UserUpdateRequest request = new UserUpdateRequest("updateUser", null, null);
 
-    MockMultipartFile requestPart = new MockMultipartFile(
-        "userUpdateRequest", "", MediaType.APPLICATION_JSON_VALUE,
-        objectMapper.writeValueAsBytes(request)
-    );
-
     mockMvc.perform(multipart("/api/users/{id}", savedUser.getId())
-            .file(requestPart)
-            .header(HttpHeaders.AUTHORIZATION, "Bearer " + accessToken)
-            .cookie(csrfCookie)
-            .header(CSRF_HEADER_NAME, csrfToken)
+            .file(jsonPart("userUpdateRequest", request))
+            .with(auth(accessToken))
             .with(req -> {
               req.setMethod("PATCH");
               return req;
@@ -201,27 +172,22 @@ public class UserIntegrationTest {
   }
 
   @Test
-  @DisplayName("본인이 아닌 다른 사용자를 수정 시도할 경우 403을 반환")
+  @DisplayName("본인이 아닌 다른 사용자를 수정 시도할 경우 403을 반환하고 수정되지 않음")
   void updateUser_otherUser_returns403() throws Exception {
-    User otherUser = userRepository.save(
-        new User("other", "other@test.com", "password123", null));
+    User otherUser = saveUser("other", Role.USER);
     UserUpdateRequest request = new UserUpdateRequest("hacked", null, null);
 
-    MockMultipartFile requestPart = new MockMultipartFile(
-        "userUpdateRequest", "", MediaType.APPLICATION_JSON_VALUE,
-        objectMapper.writeValueAsBytes(request)
-    );
-
     mockMvc.perform(multipart("/api/users/{id}", otherUser.getId())
-            .file(requestPart)
-            .header(HttpHeaders.AUTHORIZATION, "Bearer " + accessToken)
-            .cookie(csrfCookie)
-            .header(CSRF_HEADER_NAME, csrfToken)
+            .file(jsonPart("userUpdateRequest", request))
+            .with(auth(accessToken))
             .with(req -> {
               req.setMethod("PATCH");
               return req;
             }))
         .andDo(print())
         .andExpect(status().isForbidden());
+
+    assertThat(userRepository.findById(otherUser.getId()))
+        .hasValueSatisfying(user -> assertThat(user.getUsername()).isEqualTo("other"));
   }
 }
