@@ -16,22 +16,33 @@ import org.springframework.data.redis.serializer.StringRedisSerializer;
 @Configuration
 public class RedisConfig {
 
-  @Bean
-  public RedisSerializer<Object> jwtRedisSerializer(ObjectMapper objectMapper) {
-    ObjectMapper jwtObjectMapper = objectMapper.copy();
+  /**
+   * 타입 정보를 함께 저장하는 Redis JSON 직렬화기. 캐시와 JWT 저장소가 같은 규칙을 쓰도록 한 곳에서 만든다.
+   * <p>
+   * Redis 값에 담긴 타입 정보로 아무 클래스나 만들 수 없도록(역직렬화 가젯 공격) 허용 목록을 둔다.
+   * 저장되는 DTO가 쓰는 패키지만 허용하며, 새 타입을 캐싱할 때는 왕복 테스트로 확인한다.
+   */
+  static RedisSerializer<Object> typedJsonSerializer(ObjectMapper objectMapper) {
+    ObjectMapper typedObjectMapper = objectMapper.copy();
 
     PolymorphicTypeValidator typeValidator = BasicPolymorphicTypeValidator.builder()
         .allowIfSubType("com.sprint.mission.discodeit")
         .allowIfSubType("java.util")
+        .allowIfSubType("java.time")
         .build();
 
-    jwtObjectMapper.activateDefaultTyping(
+    typedObjectMapper.activateDefaultTyping(
         typeValidator,
         DefaultTyping.EVERYTHING,
         As.PROPERTY
     );
 
-    return new GenericJackson2JsonRedisSerializer(jwtObjectMapper);
+    return new GenericJackson2JsonRedisSerializer(typedObjectMapper);
+  }
+
+  @Bean
+  public RedisSerializer<Object> jwtRedisSerializer(ObjectMapper objectMapper) {
+    return typedJsonSerializer(objectMapper);
   }
 
   @Bean
