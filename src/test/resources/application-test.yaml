@@ -24,6 +24,10 @@ spring:
   # 테스트는 외부 인프라(Redis) 없이 실행되도록 인메모리 캐시 사용
   cache:
     type: simple
+  # 테스트에서는 Kafka 브로커 없이 실행되도록 컨슈머를 시작하지 않음 (프로듀서는 MockitoBean으로 대체)
+  kafka:
+    listener:
+      auto-startup: false
 
 logging:
   level:

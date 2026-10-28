@@ -1,15 +1,13 @@
 package com.sprint.mission.discodeit.integration;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch;
-import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultHandlers.print;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import com.sprint.mission.discodeit.dto.channel.ChannelUpdateRequest;
 import com.sprint.mission.discodeit.dto.channel.PrivateChannelRequest;
 import com.sprint.mission.discodeit.dto.channel.PublicChannelRequest;
@@ -18,61 +16,28 @@ import com.sprint.mission.discodeit.entity.ChannelType;
 import com.sprint.mission.discodeit.entity.Role;
 import com.sprint.mission.discodeit.entity.User;
 import com.sprint.mission.discodeit.repository.ChannelRepository;
-import com.sprint.mission.discodeit.repository.UserRepository;
-import jakarta.servlet.http.Cookie;
-import org.springframework.security.crypto.password.PasswordEncoder;
 import java.util.List;
 import java.util.UUID;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
-import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.boot.test.context.SpringBootTest.WebEnvironment;
-import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
-import org.springframework.test.context.ActiveProfiles;
-import org.springframework.test.web.servlet.MockMvc;
-import org.springframework.test.web.servlet.MvcResult;
-import org.springframework.transaction.annotation.Transactional;
 
-@SpringBootTest(webEnvironment = WebEnvironment.RANDOM_PORT)
-@AutoConfigureMockMvc
-@ActiveProfiles("test")
-@Transactional
-public class ChannelIntegrationTest {
-
-  private static final String CSRF_COOKIE_NAME = "XSRF-TOKEN";
-  private static final String CSRF_HEADER_NAME = "X-XSRF-TOKEN";
-
-  @Autowired
-  private MockMvc mockMvc;
-
-  @Autowired
-  private ObjectMapper objectMapper;
+class ChannelIntegrationTest extends AbstractIntegrationTest {
 
   @Autowired
   private ChannelRepository channelRepository;
-
-  @Autowired
-  private UserRepository userRepository;
-
-  @Autowired
-  private PasswordEncoder passwordEncoder;
 
   private Channel savedPublicChannel;
   private Channel savedPrivateChannel;
   private User savedUser;
   private String accessToken;
-  private String csrfToken;
-  private Cookie csrfCookie;
 
   @BeforeEach
   void setUp() throws Exception {
-    User user = new User("testUser", "test@test.com", passwordEncoder.encode("password123"), null);
-    user.updateRole(Role.CHANNEL_MANAGER);
-    savedUser = userRepository.save(user);
+    savedUser = saveUser("testUser", Role.CHANNEL_MANAGER);
 
     savedPublicChannel = channelRepository.save(
         new Channel("public", "test channel", ChannelType.PUBLIC)
@@ -81,22 +46,7 @@ public class ChannelIntegrationTest {
         new Channel("", "", ChannelType.PRIVATE)
     );
 
-    MvcResult csrfResult = mockMvc.perform(get("/api/auth/csrf-token"))
-        .andExpect(status().isNoContent())
-        .andReturn();
-    csrfCookie = csrfResult.getResponse().getCookie(CSRF_COOKIE_NAME);
-    csrfToken = csrfCookie.getValue();
-
-    MvcResult loginResult = mockMvc.perform(post("/api/auth/login")
-            .param("username", "testUser")
-            .param("password", "password123")
-            .cookie(csrfCookie)
-            .header(CSRF_HEADER_NAME, csrfToken))
-        .andExpect(status().isOk())
-        .andReturn();
-
-    JsonNode json = objectMapper.readTree(loginResult.getResponse().getContentAsString());
-    accessToken = json.get("accessToken").asText();
+    accessToken = login("testUser");
   }
 
   // --- POST(PUBLIC) ---
@@ -108,9 +58,7 @@ public class ChannelIntegrationTest {
     mockMvc.perform(post("/api/channels/public")
             .contentType(MediaType.APPLICATION_JSON)
             .content(objectMapper.writeValueAsString(request))
-            .header(HttpHeaders.AUTHORIZATION, "Bearer " + accessToken)
-            .cookie(csrfCookie)
-            .header(CSRF_HEADER_NAME, csrfToken))
+            .with(auth(accessToken)))
         .andDo(print())
         .andExpect(status().isCreated())
         .andExpect(jsonPath("$.name").value("test"))
@@ -126,9 +74,7 @@ public class ChannelIntegrationTest {
     mockMvc.perform(post("/api/channels/public")
             .contentType(MediaType.APPLICATION_JSON)
             .content(objectMapper.writeValueAsString(request))
-            .header(HttpHeaders.AUTHORIZATION, "Bearer " + accessToken)
-            .cookie(csrfCookie)
-            .header(CSRF_HEADER_NAME, csrfToken))
+            .with(auth(accessToken)))
         .andDo(print())
         .andExpect(status().isBadRequest())
         .andExpect(jsonPath("$.code").value("VALIDATION_ERROR"));
@@ -143,10 +89,9 @@ public class ChannelIntegrationTest {
     mockMvc.perform(post("/api/channels/private")
             .contentType(MediaType.APPLICATION_JSON)
             .content(objectMapper.writeValueAsString(request))
-            .header(HttpHeaders.AUTHORIZATION, "Bearer " + accessToken)
-            .cookie(csrfCookie)
-            .header(CSRF_HEADER_NAME, csrfToken))
+            .with(auth(accessToken)))
         .andDo(print())
+        .andExpect(status().isCreated())
         .andExpect(jsonPath("$.type").value("PRIVATE"))
         .andExpect(jsonPath("$.participants.length()").value(1));
   }
@@ -159,9 +104,7 @@ public class ChannelIntegrationTest {
     mockMvc.perform(post("/api/channels/private")
             .contentType(MediaType.APPLICATION_JSON)
             .content(objectMapper.writeValueAsString(request))
-            .header(HttpHeaders.AUTHORIZATION, "Bearer " + accessToken)
-            .cookie(csrfCookie)
-            .header(CSRF_HEADER_NAME, csrfToken))
+            .with(auth(accessToken)))
         .andDo(print())
         .andExpect(status().isNotFound())
         .andExpect(jsonPath("$.code").value("USER_NOT_FOUND"));
@@ -172,20 +115,18 @@ public class ChannelIntegrationTest {
   @DisplayName("존재하는 채널 삭제 시 204를 반환")
   void deleteChannel_returns204() throws Exception {
     mockMvc.perform(delete("/api/channels/{channelId}", savedPublicChannel.getId())
-            .header(HttpHeaders.AUTHORIZATION, "Bearer " + accessToken)
-            .cookie(csrfCookie)
-            .header(CSRF_HEADER_NAME, csrfToken))
+            .with(auth(accessToken)))
         .andDo(print())
         .andExpect(status().isNoContent());
+
+    assertThat(channelRepository.findById(savedPublicChannel.getId())).isEmpty();
   }
 
   @Test
   @DisplayName("존재하지 않는 채널 삭제 시 404와 CHANNEL_NOT_FOUND를 반환")
   void deleteChannel_notFound_returns404() throws Exception {
     mockMvc.perform(delete("/api/channels/{channelId}", UUID.randomUUID())
-            .header(HttpHeaders.AUTHORIZATION, "Bearer " + accessToken)
-            .cookie(csrfCookie)
-            .header(CSRF_HEADER_NAME, csrfToken))
+            .with(auth(accessToken)))
         .andDo(print())
         .andExpect(status().isNotFound())
         .andExpect(jsonPath("$.code").value("CHANNEL_NOT_FOUND"));
@@ -200,9 +141,7 @@ public class ChannelIntegrationTest {
     mockMvc.perform(patch("/api/channels/{channelId}", savedPublicChannel.getId())
             .contentType(MediaType.APPLICATION_JSON)
             .content(objectMapper.writeValueAsString(request))
-            .header(HttpHeaders.AUTHORIZATION, "Bearer " + accessToken)
-            .cookie(csrfCookie)
-            .header(CSRF_HEADER_NAME, csrfToken))
+            .with(auth(accessToken)))
         .andDo(print())
         .andExpect(status().isOk())
         .andExpect(jsonPath("$.name").value("updateName"))
@@ -217,11 +156,73 @@ public class ChannelIntegrationTest {
     mockMvc.perform(patch("/api/channels/{channelId}", savedPrivateChannel.getId())
             .contentType(MediaType.APPLICATION_JSON)
             .content(objectMapper.writeValueAsString(request))
-            .header(HttpHeaders.AUTHORIZATION, "Bearer " + accessToken)
-            .cookie(csrfCookie)
-            .header(CSRF_HEADER_NAME, csrfToken))
+            .with(auth(accessToken)))
         .andDo(print())
         .andExpect(status().isBadRequest())
         .andExpect(jsonPath("$.code").value("CHANNEL_MODIFY_PRIVATE"));
+  }
+
+  @Nested
+  @DisplayName("CHANNEL_MANAGER 권한이 없는 일반 사용자")
+  class WithoutChannelManagerRole {
+
+    private String userToken;
+
+    @BeforeEach
+    void loginAsUser() throws Exception {
+      saveUser("normalUser", Role.USER);
+      userToken = login("normalUser");
+    }
+
+    @Test
+    @DisplayName("Public 채널을 생성하면 403을 반환")
+    void createPublicChannel_returns403() throws Exception {
+      PublicChannelRequest request = new PublicChannelRequest("test", "des");
+
+      mockMvc.perform(post("/api/channels/public")
+              .contentType(MediaType.APPLICATION_JSON)
+              .content(objectMapper.writeValueAsString(request))
+              .with(auth(userToken)))
+          .andExpect(status().isForbidden());
+
+      assertThat(channelRepository.count()).isEqualTo(2);
+    }
+
+    @Test
+    @DisplayName("Public 채널을 수정하면 403을 반환하고 수정되지 않음")
+    void updatePublicChannel_returns403() throws Exception {
+      ChannelUpdateRequest request = new ChannelUpdateRequest("hacked", null);
+
+      mockMvc.perform(patch("/api/channels/{channelId}", savedPublicChannel.getId())
+              .contentType(MediaType.APPLICATION_JSON)
+              .content(objectMapper.writeValueAsString(request))
+              .with(auth(userToken)))
+          .andExpect(status().isForbidden());
+
+      assertThat(channelRepository.findById(savedPublicChannel.getId()))
+          .hasValueSatisfying(channel -> assertThat(channel.getName()).isEqualTo("public"));
+    }
+
+    @Test
+    @DisplayName("채널을 삭제하면 403을 반환하고 삭제되지 않음")
+    void deleteChannel_returns403() throws Exception {
+      mockMvc.perform(delete("/api/channels/{channelId}", savedPublicChannel.getId())
+              .with(auth(userToken)))
+          .andExpect(status().isForbidden());
+
+      assertThat(channelRepository.findById(savedPublicChannel.getId())).isPresent();
+    }
+
+    @Test
+    @DisplayName("Private 채널은 권한과 관계없이 생성할 수 있음")
+    void createPrivateChannel_returns201() throws Exception {
+      PrivateChannelRequest request = new PrivateChannelRequest(List.of(savedUser.getId()));
+
+      mockMvc.perform(post("/api/channels/private")
+              .contentType(MediaType.APPLICATION_JSON)
+              .content(objectMapper.writeValueAsString(request))
+              .with(auth(userToken)))
+          .andExpect(status().isCreated());
+    }
   }
 }

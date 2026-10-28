@@ -1,9 +1,15 @@
 package com.sprint.mission.discodeit.service.basic;
 
-import static org.assertj.core.api.Assertions.*;
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.BDDMockito.*;
+import static org.mockito.ArgumentMatchers.anyBoolean;
+import static org.mockito.ArgumentMatchers.argThat;
+import static org.mockito.BDDMockito.given;
+import static org.mockito.BDDMockito.then;
+import static org.mockito.Mockito.never;
 
+import com.sprint.mission.discodeit.dto.user.RoleUpdateRequest;
 import com.sprint.mission.discodeit.dto.user.UserCreateRequest;
 import com.sprint.mission.discodeit.dto.user.UserDto;
 import com.sprint.mission.discodeit.dto.user.UserUpdateRequest;
@@ -11,6 +17,9 @@ import com.sprint.mission.discodeit.entity.BinaryContent;
 import com.sprint.mission.discodeit.entity.Role;
 import com.sprint.mission.discodeit.entity.User;
 import com.sprint.mission.discodeit.event.BinaryContentCreatedEvent;
+import com.sprint.mission.discodeit.event.PasswordChangeEvent;
+import com.sprint.mission.discodeit.event.RoleUpdatedEvent;
+import com.sprint.mission.discodeit.event.UserCreatedEvent;
 import com.sprint.mission.discodeit.exception.user.DuplicateUserException;
 import com.sprint.mission.discodeit.exception.user.EmailAlreadyExistsException;
 import com.sprint.mission.discodeit.exception.user.UserNotFoundException;
@@ -19,23 +28,22 @@ import com.sprint.mission.discodeit.repository.BinaryContentRepository;
 import com.sprint.mission.discodeit.repository.UserRepository;
 import com.sprint.mission.discodeit.security.jwt.JwtRegistry;
 import com.sprint.mission.discodeit.storage.BinaryContentStorage;
+import java.util.Collections;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 import org.junit.jupiter.api.BeforeEach;
-import org.springframework.security.crypto.password.PasswordEncoder;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
-import org.mockito.InjectMocks;
+import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.mock.web.MockMultipartFile;
+import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.test.util.ReflectionTestUtils;
-
-import static org.mockito.BDDMockito.given;
-import static org.mockito.BDDMockito.then;
 
 @ExtendWith(MockitoExtension.class)
 class BasicUserServiceTest {
@@ -55,7 +63,7 @@ class BasicUserServiceTest {
   @Mock
   private PasswordEncoder passwordEncoder;
 
-  @InjectMocks
+  // @InjectMocks는 누락된 생성자 인자에 null을 주입하므로, 직접 생성해 의존성 변경을 컴파일 타임에 드러낸다
   private BasicUserService userService;
 
   private UUID userId;
@@ -64,8 +72,12 @@ class BasicUserServiceTest {
 
   @BeforeEach
   void setUp() {
+    userService = new BasicUserService(userRepository, binaryContentRepository,
+        binaryContentStorage, jwtRegistry, userMapper, passwordEncoder, eventPublisher);
+
     userId = UUID.randomUUID();
     mockUser = new User("testUser", "test@test.com", "password123", null);
+    ReflectionTestUtils.setField(mockUser, "id", userId);
 
     mockUserDto = new UserDto(
         userId,
@@ -90,32 +102,58 @@ class BasicUserServiceTest {
 
     // --- 성공 ---
     @Test
-    @DisplayName("유저 생성 성공 - 프로필 이미지가 없이 유저가 생성됨")
+    @DisplayName("유저 생성 성공 - 비밀번호가 인코딩되어 저장되고 생성 이벤트가 발행됨")
     void createUser_success_withoutProfile() {
       // given
       given(userRepository.findByUsername("tester")).willReturn(Optional.empty());
       given(userRepository.findByEmail("test@test.com")).willReturn(Optional.empty());
-      given(userRepository.save(any(User.class))).willReturn(mockUser);
+      given(passwordEncoder.encode("password123")).willReturn("encodedPassword");
       given(userMapper.toDto(any(User.class), anyBoolean())).willReturn(mockUserDto);
 
       // when
-      UserDto result = userService.createUser(request, null);
+      userService.createUser(request, null);
 
       // then
-      assertThat(result).isNotNull();
-      assertThat(result.username()).isEqualTo("tester");
+      ArgumentCaptor<User> captor = ArgumentCaptor.forClass(User.class);
+      then(userRepository).should().save(captor.capture());
+      User saved = captor.getValue();
+      assertThat(saved.getUsername()).isEqualTo("tester");
+      assertThat(saved.getEmail()).isEqualTo("test@test.com");
+      assertThat(saved.getPassword()).isEqualTo("encodedPassword");
+      assertThat(saved.getRole()).isEqualTo(Role.USER);
+      assertThat(saved.getProfile()).isNull();
 
-      then(userRepository).should().save(any(User.class));
       then(binaryContentRepository).should(never()).save(any());
+      then(eventPublisher).should().publishEvent(any(UserCreatedEvent.class));
     }
 
     @Test
-    @DisplayName("유저 생성 성공 - 프로필 이미지와 함께 유저가 생성됨")
+    @DisplayName("유저 생성 성공 - username, email, password의 앞뒤 공백이 제거되어 저장됨")
+    void createUser_trimsInput() {
+      // given
+      UserCreateRequest paddedRequest = new UserCreateRequest("  tester ", " test@test.com ",
+          " password123 ");
+      given(userRepository.findByUsername("tester")).willReturn(Optional.empty());
+      given(userRepository.findByEmail("test@test.com")).willReturn(Optional.empty());
+      given(passwordEncoder.encode("password123")).willReturn("encodedPassword");
+
+      // when
+      userService.createUser(paddedRequest, null);
+
+      // then
+      ArgumentCaptor<User> captor = ArgumentCaptor.forClass(User.class);
+      then(userRepository).should().save(captor.capture());
+      assertThat(captor.getValue().getUsername()).isEqualTo("tester");
+      assertThat(captor.getValue().getEmail()).isEqualTo("test@test.com");
+    }
+
+    @Test
+    @DisplayName("유저 생성 성공 - 프로필 이미지 메타데이터가 저장되고 바이너리 저장 이벤트가 발행됨")
     void createUser_success_withProfile() {
       MockMultipartFile profileFile = new MockMultipartFile(
           "profile", "profile.png", "image/png", "fake-image-bytes".getBytes()
       );
-      BinaryContent savedBinary = new BinaryContent("image.png", "image/png", 15L);
+      BinaryContent savedBinary = new BinaryContent("profile.png", "image/png", 16L);
       UUID binaryId = UUID.randomUUID();
       ReflectionTestUtils.setField(savedBinary, "id", binaryId);
 
@@ -123,17 +161,25 @@ class BasicUserServiceTest {
       given(userRepository.findByUsername("tester")).willReturn(Optional.empty());
       given(userRepository.findByEmail("test@test.com")).willReturn(Optional.empty());
       given(binaryContentRepository.save(any(BinaryContent.class))).willReturn(savedBinary);
-      given(userRepository.save(any(User.class))).willReturn(mockUser);
-      given(userMapper.toDto(any(User.class), anyBoolean())).willReturn(mockUserDto);
       given(passwordEncoder.encode(any())).willReturn("encodedPassword");
 
       // when
-      UserDto result = userService.createUser(request, profileFile);
+      userService.createUser(request, profileFile);
 
       // then
-      assertThat(result).isNotNull();
-      then(binaryContentRepository).should().save(any(BinaryContent.class));
-      then(eventPublisher).should().publishEvent(any(BinaryContentCreatedEvent.class));
+      ArgumentCaptor<BinaryContent> binaryCaptor = ArgumentCaptor.forClass(BinaryContent.class);
+      then(binaryContentRepository).should().save(binaryCaptor.capture());
+      assertThat(binaryCaptor.getValue().getFileName()).isEqualTo("profile.png");
+      assertThat(binaryCaptor.getValue().getContentType()).isEqualTo("image/png");
+
+      ArgumentCaptor<User> userCaptor = ArgumentCaptor.forClass(User.class);
+      then(userRepository).should().save(userCaptor.capture());
+      assertThat(userCaptor.getValue().getProfile()).isSameAs(binaryCaptor.getValue());
+
+      then(eventPublisher).should().publishEvent(argThat((Object event) ->
+          event instanceof BinaryContentCreatedEvent e
+              && e.binaryContentId().equals(binaryId)
+              && new String(e.bytes()).equals("fake-image-bytes")));
     }
 
     // --- 실패 ---
@@ -166,6 +212,50 @@ class BasicUserServiceTest {
   }
 
   @Nested
+  @DisplayName("readUser()")
+  class ReadUser {
+
+    @Test
+    @DisplayName("활성 JWT가 있는 사용자는 online=true로 조회됨")
+    void readUser_activeUser_online() {
+      // given
+      given(userRepository.findById(userId)).willReturn(Optional.of(mockUser));
+      given(jwtRegistry.getActiveUserIds()).willReturn(Set.of(userId));
+
+      // when
+      userService.readUser(userId);
+
+      // then
+      then(userMapper).should().toDto(mockUser, true);
+    }
+
+    @Test
+    @DisplayName("활성 JWT가 없는 사용자는 online=false로 조회됨")
+    void readUser_inactiveUser_offline() {
+      // given
+      given(userRepository.findById(userId)).willReturn(Optional.of(mockUser));
+      given(jwtRegistry.getActiveUserIds()).willReturn(Set.of(UUID.randomUUID()));
+
+      // when
+      userService.readUser(userId);
+
+      // then
+      then(userMapper).should().toDto(mockUser, false);
+    }
+
+    @Test
+    @DisplayName("존재하지 않는 userId일 경우 UserNotFoundException 발생")
+    void readUser_userNotFound_throwsUserNotFoundException() {
+      // given
+      given(userRepository.findById(userId)).willReturn(Optional.empty());
+
+      // when & then
+      assertThatThrownBy(() -> userService.readUser(userId))
+          .isInstanceOf(UserNotFoundException.class);
+    }
+  }
+
+  @Nested
   @DisplayName("deleteUser()")
   class DeleteUser {
 
@@ -178,7 +268,6 @@ class BasicUserServiceTest {
       User userWithProfile = new User("tester", "test@test.com", "pw", profile);
 
       given(userRepository.findById(userId)).willReturn(Optional.of(userWithProfile));
-      given(userRepository.save(any(User.class))).willReturn(userWithProfile);
 
       // when
       userService.deleteUser(userId);
@@ -193,7 +282,6 @@ class BasicUserServiceTest {
     void deleteUser_withoutProfile_deletesUser() {
       // given
       given(userRepository.findById(userId)).willReturn(Optional.of(mockUser));
-      given(userRepository.save(any(User.class))).willReturn(mockUser);
 
       // when
       userService.deleteUser(userId);
@@ -224,29 +312,62 @@ class BasicUserServiceTest {
 
     // --- 성공 ---
     @Test
-    @DisplayName("username, email, password를 정상적으로 변경")
+    @DisplayName("username, email, password가 변경되고 비밀번호는 인코딩되어 저장됨")
     void updateUser_allField_success() {
       // given
       UserUpdateRequest updateRequest = new UserUpdateRequest("newName", "new@test.com",
           "newPassword123");
-      UserDto updatedDto = new UserDto(userId, "newName", "new@test.com", null, true, Role.USER);
 
       given(userRepository.findById(userId)).willReturn(Optional.of(mockUser));
       given(userRepository.findByUsername("newName")).willReturn(Optional.empty());
       given(userRepository.findByEmail("new@test.com")).willReturn(Optional.empty());
-      given(userMapper.toDto(any(User.class), anyBoolean())).willReturn(updatedDto);
-      given(jwtRegistry.getActiveUserIds()).willReturn(java.util.Collections.emptySet());
+      given(passwordEncoder.encode("newPassword123")).willReturn("encodedNewPassword");
+      given(jwtRegistry.getActiveUserIds()).willReturn(Collections.emptySet());
 
       // when
-      UserDto result = userService.updateUser(userId, updateRequest, null);
+      userService.updateUser(userId, updateRequest, null);
 
       // then
-      assertThat(result.username()).isEqualTo("newName");
-      assertThat(result.email()).isEqualTo("new@test.com");
+      assertThat(mockUser.getUsername()).isEqualTo("newName");
+      assertThat(mockUser.getEmail()).isEqualTo("new@test.com");
+      assertThat(mockUser.getPassword()).isEqualTo("encodedNewPassword");
     }
 
     @Test
-    @DisplayName("프로필 이미지 변경")
+    @DisplayName("비밀번호를 변경하면 PasswordChangeEvent가 발행됨")
+    void updateUser_passwordChanged_publishesPasswordChangeEvent() {
+      // given
+      given(userRepository.findById(userId)).willReturn(Optional.of(mockUser));
+      given(passwordEncoder.encode("newPassword123")).willReturn("encodedNewPassword");
+      given(jwtRegistry.getActiveUserIds()).willReturn(Collections.emptySet());
+
+      // when
+      userService.updateUser(userId, new UserUpdateRequest(null, null, "newPassword123"), null);
+
+      // then
+      then(eventPublisher).should().publishEvent(argThat((Object event) ->
+          event instanceof PasswordChangeEvent e && e.getUserId().equals(userId)));
+    }
+
+    @Test
+    @DisplayName("비밀번호를 변경하지 않으면 기존 비밀번호가 유지되고 PasswordChangeEvent가 발행되지 않음")
+    void updateUser_passwordNotChanged_keepsPassword() {
+      // given
+      given(userRepository.findById(userId)).willReturn(Optional.of(mockUser));
+      given(userRepository.findByUsername("newName")).willReturn(Optional.empty());
+      given(jwtRegistry.getActiveUserIds()).willReturn(Collections.emptySet());
+
+      // when
+      userService.updateUser(userId, new UserUpdateRequest("newName", null, null), null);
+
+      // then
+      assertThat(mockUser.getPassword()).isEqualTo("password123");
+      then(passwordEncoder).should(never()).encode(any());
+      then(eventPublisher).should(never()).publishEvent(any(PasswordChangeEvent.class));
+    }
+
+    @Test
+    @DisplayName("프로필 이미지 변경 시 기존 이미지는 삭제되고 새 이미지로 교체됨")
     void updateUser_profileImage_success() {
       //given
       BinaryContent existingProfile = new BinaryContent("last.png", "image.png", 10L);
@@ -261,16 +382,17 @@ class BasicUserServiceTest {
 
       given(userRepository.findById(userId)).willReturn(Optional.of(userWithProfile));
       given(binaryContentRepository.save(any(BinaryContent.class))).willReturn(newBinary);
-      given(userMapper.toDto(any(User.class), anyBoolean())).willReturn(mockUserDto);
-      given(jwtRegistry.getActiveUserIds()).willReturn(java.util.Collections.emptySet());
+      given(jwtRegistry.getActiveUserIds()).willReturn(Collections.emptySet());
 
       // when
       userService.updateUser(userId, new UserUpdateRequest(null, null, null), newProfileFile);
 
       // then
       then(binaryContentRepository).should().delete(existingProfile);
-      then(binaryContentRepository).should().save(any(BinaryContent.class));
-      then(eventPublisher).should().publishEvent(any(BinaryContentCreatedEvent.class));
+      assertThat(userWithProfile.getProfile().getFileName()).isEqualTo("new.png");
+      then(eventPublisher).should().publishEvent(argThat((Object event) ->
+          event instanceof BinaryContentCreatedEvent e
+              && e.binaryContentId().equals(newBinaryId)));
     }
 
     // --- 실패 ---
@@ -299,6 +421,7 @@ class BasicUserServiceTest {
       // when & then
       assertThatThrownBy(() -> userService.updateUser(userId, updateRequest, null))
           .isInstanceOf(DuplicateUserException.class);
+      assertThat(mockUser.getUsername()).isEqualTo("testUser");
     }
 
     @Test
@@ -314,6 +437,41 @@ class BasicUserServiceTest {
       // when & then
       assertThatThrownBy(() -> userService.updateUser(userId, updateRequest, null))
           .isInstanceOf(EmailAlreadyExistsException.class);
+      assertThat(mockUser.getEmail()).isEqualTo("test@test.com");
+    }
+  }
+
+  @Nested
+  @DisplayName("updateRole()")
+  class UpdateRole {
+
+    @Test
+    @DisplayName("권한이 변경되면 RoleUpdatedEvent가 발행되고 기존 JWT가 무효화됨")
+    void updateRole_success_invalidatesJwt() {
+      // given
+      given(userRepository.findById(userId)).willReturn(Optional.of(mockUser));
+
+      // when
+      userService.updateRole(new RoleUpdateRequest(userId, Role.CHANNEL_MANAGER));
+
+      // then
+      assertThat(mockUser.getRole()).isEqualTo(Role.CHANNEL_MANAGER);
+      then(eventPublisher).should()
+          .publishEvent(new RoleUpdatedEvent(userId, Role.USER, Role.CHANNEL_MANAGER));
+      then(jwtRegistry).should().invalidateJwtInformationByUserId(userId);
+    }
+
+    @Test
+    @DisplayName("존재하지 않는 userId일 경우 UserNotFoundException이 발생하고 JWT는 무효화되지 않음")
+    void updateRole_userNotFound_throwsUserNotFoundException() {
+      // given
+      given(userRepository.findById(userId)).willReturn(Optional.empty());
+
+      // when & then
+      assertThatThrownBy(
+          () -> userService.updateRole(new RoleUpdateRequest(userId, Role.ADMIN)))
+          .isInstanceOf(UserNotFoundException.class);
+      then(jwtRegistry).should(never()).invalidateJwtInformationByUserId(any());
     }
   }
 }
