@@ -17,6 +17,12 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.sprint.mission.discodeit.advice.GlobalExceptionHandler;
 import com.sprint.mission.discodeit.dto.message.CreateMessageRequest;
+import com.sprint.mission.discodeit.dto.user.UserDto;
+import com.sprint.mission.discodeit.entity.Role;
+import com.sprint.mission.discodeit.security.DiscodeitUserDetails;
+import org.junit.jupiter.api.AfterEach;
+import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
+import org.springframework.security.core.context.SecurityContextHolder;
 import com.sprint.mission.discodeit.dto.message.MessageDto;
 import com.sprint.mission.discodeit.dto.message.MessageUpdateRequest;
 import com.sprint.mission.discodeit.dto.response.PageResponse;
@@ -50,17 +56,31 @@ class MessageControllerTest {
   @MockitoBean
   private MessageService messageService;
 
+  @AfterEach
+  void clearSecurityContext() {
+    SecurityContextHolder.clearContext();
+  }
+
+  // 보안 필터를 끈 슬라이스 테스트이므로 @AuthenticationPrincipal에 주입될 인증 정보를 직접 설정
+  private void authenticateAs(UUID userId) {
+    DiscodeitUserDetails principal = new DiscodeitUserDetails(
+        new UserDto(userId, "tester", "test@test.com", null, true, Role.USER), "pw");
+    SecurityContextHolder.getContext().setAuthentication(
+        new UsernamePasswordAuthenticationToken(principal, null, principal.getAuthorities()));
+  }
+
   // --- POST ---
   @Test
   @DisplayName("유효한 요청으로 메시지 생성 시 201과 생성된 메시지 JSON을 반환")
   void createMessage_return201() throws Exception {
     UUID channelId = UUID.randomUUID();
     UUID authorId = UUID.randomUUID();
-    CreateMessageRequest request = new CreateMessageRequest(channelId, authorId, "test");
+    CreateMessageRequest request = new CreateMessageRequest(channelId, "test");
     MessageDto response = new MessageDto(UUID.randomUUID(), Instant.now(), Instant.now(), "test",
         channelId, null, List.of());
-    given(messageService.createMessage(any(), any()))
+    given(messageService.createMessage(eq(authorId), any(), any()))
         .willReturn(response);
+    authenticateAs(authorId);
 
     MockMultipartFile requestPart = new MockMultipartFile(
         "messageCreateRequest", "", MediaType.APPLICATION_JSON_VALUE,
@@ -77,9 +97,7 @@ class MessageControllerTest {
   @Test
   @DisplayName("내용이 비어있는 메시지 생성 요청 시 400과 VALIDATION_ERROR를 반환")
   void createMessage_blankContent_return400() throws Exception {
-    CreateMessageRequest request = new CreateMessageRequest(
-        UUID.randomUUID(), UUID.randomUUID(), " "
-    );
+    CreateMessageRequest request = new CreateMessageRequest(UUID.randomUUID(), " ");
     MockMultipartFile requestPart = new MockMultipartFile(
         "messageCreateRequest", "", MediaType.APPLICATION_JSON_VALUE,
         objectMapper.writeValueAsBytes(request)

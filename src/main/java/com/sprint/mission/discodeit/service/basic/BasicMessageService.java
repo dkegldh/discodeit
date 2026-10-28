@@ -58,19 +58,19 @@ public class BasicMessageService implements MessageService {
 
   @Override
   @Transactional
-  public MessageDto createMessage(CreateMessageRequest request,
+  public MessageDto createMessage(UUID authorId, CreateMessageRequest request,
       List<MultipartFile> attachments) {
     log.debug("메시지 생성 비즈니스 로직 시작 - channelId: {}, authorId: {}", request.channelId(),
-        request.authorId());
+        authorId);
     Channel channel = channelRepository.findById(request.channelId())
         .orElseThrow(() -> {
           log.warn("메세지 생성 실패 - 채널이 존재하지 않음 - channelId: {}", request.channelId());
           return new ChannelNotFoundException(request.channelId());
         });
-    User author = userRepository.findById(request.authorId())
+    User author = userRepository.findById(authorId)
         .orElseThrow(() -> {
-          log.warn("메시지 생성 실패 - 유저를 찾을 수 없음 - authorId: {}", request.authorId());
-          return new UserNotFoundException(request.authorId());
+          log.warn("메시지 생성 실패 - 유저를 찾을 수 없음 - authorId: {}", authorId);
+          return new UserNotFoundException(authorId);
         });
 
     Message message = new Message(channel, author, request.content());
