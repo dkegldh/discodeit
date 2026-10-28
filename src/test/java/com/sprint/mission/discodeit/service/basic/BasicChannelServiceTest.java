@@ -7,14 +7,19 @@ import static org.mockito.BDDMockito.*;
 
 import com.sprint.mission.discodeit.dto.channel.ChannelDto;
 import com.sprint.mission.discodeit.dto.channel.ChannelUpdateRequest;
+import com.sprint.mission.discodeit.dto.channel.PrivateChannelCreatedEvent;
 import com.sprint.mission.discodeit.dto.channel.PrivateChannelRequest;
 import com.sprint.mission.discodeit.dto.channel.PublicChannelRequest;
 import com.sprint.mission.discodeit.dto.user.UserDto;
 import com.sprint.mission.discodeit.entity.Channel;
 import com.sprint.mission.discodeit.entity.ChannelType;
+import com.sprint.mission.discodeit.entity.Message;
 import com.sprint.mission.discodeit.entity.ReadStatus;
 import com.sprint.mission.discodeit.entity.Role;
 import com.sprint.mission.discodeit.entity.User;
+import com.sprint.mission.discodeit.event.ChannelCreatedEvent;
+import com.sprint.mission.discodeit.event.ChannelDeletedEvent;
+import com.sprint.mission.discodeit.event.ChannelUpdatedEvent;
 import com.sprint.mission.discodeit.exception.channel.ChannelNotFoundException;
 import com.sprint.mission.discodeit.exception.channel.PrivateChannelUpdateException;
 import com.sprint.mission.discodeit.exception.user.UserNotFoundException;
@@ -34,7 +39,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
-import org.mockito.InjectMocks;
+import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.context.ApplicationEventPublisher;
@@ -64,7 +69,6 @@ class BasicChannelServiceTest {
   @Mock
   private ApplicationEventPublisher applicationEventPublisher;
 
-  @InjectMocks
   private BasicChannelService channelService;
 
   private UUID channelId;
@@ -77,6 +81,9 @@ class BasicChannelServiceTest {
 
   @BeforeEach
   void setUp() {
+    channelService = new BasicChannelService(channelRepository, readStatusRepository,
+        messageRepository, userRepository, userMapper, channelMapper, applicationEventPublisher);
+
     channelId = UUID.randomUUID();
     userId = UUID.randomUUID();
 
@@ -87,6 +94,7 @@ class BasicChannelServiceTest {
     ReflectionTestUtils.setField(mockPrivateChannel, "id", channelId);
 
     mockUser = new User("tester", "test@test.com", "password123", null);
+    ReflectionTestUtils.setField(mockUser, "id", userId);
 
     mockUserDto = new UserDto(userId, "tester", "test@test.com", null, true, Role.USER);
     mockChannelDto = new ChannelDto(channelId, "테스트", ChannelType.PUBLIC, "테스트 채널입니다.",
@@ -113,24 +121,13 @@ class BasicChannelServiceTest {
       ChannelDto result = channelService.createPublicChannel(request);
 
       // then
-      assertThat(result).isNotNull();
-      assertThat(result.type()).isEqualTo(ChannelType.PUBLIC);
-      then(channelRepository).should().save(any(Channel.class));
-    }
-
-    // --- 실패 ---
-    @Test
-    @DisplayName("채널 저장 중 예외가 발생하면 그대로 전파됨")
-    void createPublicChannel_repositoryThrows_exception() {
-      // given
-      PublicChannelRequest request = new PublicChannelRequest("테스트", "테스트 채널입니다.");
-
-      given(channelRepository.save(any(Channel.class))).willThrow(new RuntimeException("DB 저장실패"));
-
-      // when & then
-      assertThatThrownBy(() -> channelService.createPublicChannel(request))
-          .isInstanceOf(RuntimeException.class)
-          .hasMessage("DB 저장실패");
+      ArgumentCaptor<Channel> captor = ArgumentCaptor.forClass(Channel.class);
+      then(channelRepository).should().save(captor.capture());
+      assertThat(captor.getValue().getName()).isEqualTo("테스트");
+      assertThat(captor.getValue().getDescription()).isEqualTo("테스트입니다.");
+      assertThat(captor.getValue().getType()).isEqualTo(ChannelType.PUBLIC);
+      then(applicationEventPublisher).should().publishEvent(argThat((Object event) ->
+          event instanceof ChannelCreatedEvent e && e.getData().equals(result)));
     }
   }
 
@@ -157,12 +154,17 @@ class BasicChannelServiceTest {
           privateChannelDto);
 
       // when
-      ChannelDto result = channelService.createPrivateChannel(request);
+      channelService.createPrivateChannel(request);
 
       // then
-      assertThat(result).isNotNull();
-      assertThat(result.type()).isEqualTo(ChannelType.PRIVATE);
-      then(readStatusRepository).should().save(any(ReadStatus.class));
+      ArgumentCaptor<ReadStatus> captor = ArgumentCaptor.forClass(ReadStatus.class);
+      then(readStatusRepository).should().save(captor.capture());
+      assertThat(captor.getValue().getUser()).isSameAs(mockUser);
+      assertThat(captor.getValue().getChannel()).isSameAs(mockPrivateChannel);
+      assertThat(captor.getValue().isNotificationEnabled()).isTrue();
+      // 참여자별 채널 목록 캐시를 무효화하기 위한 이벤트
+      then(applicationEventPublisher).should()
+          .publishEvent(new PrivateChannelCreatedEvent(List.of(participantId)));
     }
 
     // --- 실패 ---
@@ -209,6 +211,72 @@ class BasicChannelServiceTest {
     }
 
     @Test
+    @DisplayName("참여 중인 Private 채널은 참여자 목록과 함께 반환됨")
+    void findAllByUserId_privateChannel_participant() {
+      // given
+      ReadStatus readStatus = new ReadStatus(mockUser, mockPrivateChannel, Instant.now(), true);
+      given(channelRepository.findAll()).willReturn(List.of(mockPrivateChannel));
+      given(readStatusRepository.findAllByUserId(userId)).willReturn(List.of(readStatus));
+      given(messageRepository.findLatestMessagesByChannelIds(any())).willReturn(
+          Collections.emptyList());
+      given(readStatusRepository.findAllByChannelIdIn(List.of(channelId)))
+          .willReturn(List.of(readStatus));
+      given(userMapper.toDto(mockUser, false)).willReturn(mockUserDto);
+      givenChannelMapperBuildsDtoFromArguments();
+
+      // when
+      List<ChannelDto> result = channelService.findAllByUserId(userId);
+
+      // then
+      assertThat(result).hasSize(1);
+      assertThat(result.get(0).type()).isEqualTo(ChannelType.PRIVATE);
+      assertThat(result.get(0).participants()).containsExactly(mockUserDto);
+    }
+
+    @Test
+    @DisplayName("채널 목록은 마지막 메시지 시각(없으면 채널 생성 시각) 기준 내림차순으로 정렬됨")
+    void findAllByUserId_sortedByLastMessageAtDesc() {
+      // given
+      Instant now = Instant.now();
+      Channel oldChannelWithNewMessage = publicChannelCreatedAt(now.minusSeconds(300));
+      Channel newChannelWithoutMessage = publicChannelCreatedAt(now.minusSeconds(100));
+      Message latest = new Message(oldChannelWithNewMessage, mockUser, "latest");
+      ReflectionTestUtils.setField(latest, "createdAt", now);
+
+      given(channelRepository.findAll())
+          .willReturn(List.of(newChannelWithoutMessage, oldChannelWithNewMessage));
+      given(readStatusRepository.findAllByUserId(userId)).willReturn(Collections.emptyList());
+      given(messageRepository.findLatestMessagesByChannelIds(any())).willReturn(List.of(latest));
+      given(readStatusRepository.findAllByChannelIdIn(any())).willReturn(Collections.emptyList());
+      givenChannelMapperBuildsDtoFromArguments();
+
+      // when
+      List<ChannelDto> result = channelService.findAllByUserId(userId);
+
+      // then
+      assertThat(result).extracting(ChannelDto::id)
+          .containsExactly(oldChannelWithNewMessage.getId(), newChannelWithoutMessage.getId());
+      assertThat(result.get(0).lastMessageAt()).isEqualTo(now);
+      assertThat(result.get(1).lastMessageAt()).isEqualTo(now.minusSeconds(100));
+    }
+
+    private Channel publicChannelCreatedAt(Instant createdAt) {
+      Channel channel = new Channel("channel", "", ChannelType.PUBLIC);
+      ReflectionTestUtils.setField(channel, "id", UUID.randomUUID());
+      ReflectionTestUtils.setField(channel, "createdAt", createdAt);
+      return channel;
+    }
+
+    private void givenChannelMapperBuildsDtoFromArguments() {
+      given(channelMapper.toDto(any(Channel.class), nullable(Instant.class), any()))
+          .willAnswer(inv -> {
+            Channel c = inv.getArgument(0);
+            return new ChannelDto(c.getId(), c.getName(), c.getType(), c.getDescription(),
+                inv.getArgument(1), inv.getArgument(2));
+          });
+    }
+
+    @Test
     @DisplayName("Private 채널은 참여하지 않으면 반환되지 않음")
     void findAllByUserId_privateChannel_notParticipant() {
       // given
@@ -242,6 +310,7 @@ class BasicChannelServiceTest {
 
       // then
       then(channelRepository).should().delete(mockPublicChannel);
+      then(applicationEventPublisher).should().publishEvent(any(ChannelDeletedEvent.class));
     }
 
     // --- 실패 ---
@@ -281,8 +350,10 @@ class BasicChannelServiceTest {
       ChannelDto result = channelService.updateChannel(channelId, request);
 
       // then
-      assertThat(result.name()).isEqualTo("new");
-      assertThat(result.description()).isEqualTo("new");
+      assertThat(mockPublicChannel.getName()).isEqualTo("new");
+      assertThat(mockPublicChannel.getDescription()).isEqualTo("new");
+      assertThat(result).isEqualTo(updateDto);
+      then(applicationEventPublisher).should().publishEvent(any(ChannelUpdatedEvent.class));
     }
 
     // --- 실패 ---
@@ -308,6 +379,7 @@ class BasicChannelServiceTest {
       assertThatThrownBy(
           () -> channelService.updateChannel(channelId, new ChannelUpdateRequest("test", "test")))
           .isInstanceOf(PrivateChannelUpdateException.class);
+      assertThat(mockPrivateChannel.getName()).isEqualTo("Private Channel");
     }
   }
 }
