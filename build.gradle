@@ -27,6 +27,9 @@ repositories {
     mavenCentral()
 }
 
+// Boot 3.4.3이 관리하는 Testcontainers 1.20.x는 Docker Engine 29(최소 API 1.44)와 통신하지 못함
+ext['testcontainers.version'] = '1.21.4'
+
 dependencies {
     implementation 'org.springframework.boot:spring-boot-starter-web'
     implementation 'org.springdoc:springdoc-openapi-starter-webmvc-ui:2.8.4'
@@ -52,6 +55,7 @@ dependencies {
     annotationProcessor 'org.mapstruct:mapstruct-processor:1.5.5.Final'
     testImplementation 'org.springframework.boot:spring-boot-starter-test'
     testImplementation 'org.awaitility:awaitility'
+    testImplementation 'org.testcontainers:junit-jupiter'
     testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
 }
 
