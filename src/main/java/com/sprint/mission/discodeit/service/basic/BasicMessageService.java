@@ -132,12 +132,14 @@ public class BasicMessageService implements MessageService {
             limit);
 
     boolean hasNext = messages.size() > size;
+    // 다음 페이지 확인용으로 1개를 더 조회했으므로 응답에서는 제외
+    List<Message> page = hasNext ? messages.subList(0, size) : messages;
 
-    List<MessageDto> messageDtoS = messages.stream()
+    List<MessageDto> messageDtoS = page.stream()
         .map(messageMapper::toDto)
         .toList();
 
-    Instant nextCursor = hasNext ? messages.get(messages.size() - 1).getCreatedAt() : null;
+    Instant nextCursor = hasNext ? page.get(page.size() - 1).getCreatedAt() : null;
 
     return new PageResponse<>(
         messageDtoS,

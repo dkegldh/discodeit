@@ -18,6 +18,7 @@ import com.sprint.mission.discodeit.entity.MessageAttachment;
 import com.sprint.mission.discodeit.entity.Role;
 import com.sprint.mission.discodeit.entity.User;
 import com.sprint.mission.discodeit.event.BinaryContentCreatedEvent;
+import com.sprint.mission.discodeit.event.MessageCreatedEvent;
 import com.sprint.mission.discodeit.exception.channel.ChannelNotFoundException;
 import com.sprint.mission.discodeit.exception.message.MessageNotFoundException;
 import com.sprint.mission.discodeit.exception.user.UserNotFoundException;
@@ -38,7 +39,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
-import org.mockito.InjectMocks;
+import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.context.ApplicationEventPublisher;
@@ -73,7 +74,6 @@ class BasicMessageServiceTest {
   @Mock
   private PageResponseMapper pageResponseMapper;
 
-  @InjectMocks
   private BasicMessageService messageService;
 
   private UUID messageId;
@@ -87,6 +87,10 @@ class BasicMessageServiceTest {
 
   @BeforeEach
   void setUp() {
+    messageService = new BasicMessageService(messageRepository, userRepository,
+        channelRepository, binaryContentRepository, messageAttachmentRepository, eventPublisher,
+        messageMapper, pageResponseMapper);
+
     messageId = UUID.randomUUID();
     channelId = UUID.randomUUID();
     authorId = UUID.randomUUID();
@@ -122,13 +126,17 @@ class BasicMessageServiceTest {
       given(messageMapper.toDto(any(Message.class))).willReturn(mockMessageDto);
 
       // when
-      MessageDto result = messageService.createMessage(request, null);
+      messageService.createMessage(request, null);
 
       // then
-      assertThat(result).isNotNull();
-      assertThat(result.content()).isEqualTo("test message");
-      then(messageRepository).should().save(any(Message.class));
+      ArgumentCaptor<Message> captor = ArgumentCaptor.forClass(Message.class);
+      then(messageRepository).should().save(captor.capture());
+      assertThat(captor.getValue().getContent()).isEqualTo("test message");
+      assertThat(captor.getValue().getChannel()).isSameAs(mockChannel);
+      assertThat(captor.getValue().getAuthor()).isSameAs(mockAuthor);
       then(binaryContentRepository).should(never()).save(any());
+      then(eventPublisher).should().publishEvent(
+          new MessageCreatedEvent(channelId, "test", authorId, "tester", "test message"));
     }
 
     @Test
@@ -152,12 +160,16 @@ class BasicMessageServiceTest {
       given(messageMapper.toDto(any(Message.class))).willReturn(mockMessageDto);
 
       // when
-      MessageDto result = messageService.createMessage(request, List.of(file));
+      messageService.createMessage(request, List.of(file));
 
       // then
-      assertThat(result).isNotNull();
-      then(binaryContentRepository).should().save(any(BinaryContent.class));
-      then(eventPublisher).should().publishEvent(any(BinaryContentCreatedEvent.class));
+      ArgumentCaptor<Message> captor = ArgumentCaptor.forClass(Message.class);
+      then(messageRepository).should().save(captor.capture());
+      assertThat(captor.getValue().getMessageAttachments())
+          .extracting(MessageAttachment::getBinaryContent)
+          .containsExactly(savedBinaryContent);
+      then(eventPublisher).should().publishEvent(argThat((Object event) ->
+          event instanceof BinaryContentCreatedEvent e && e.binaryContentId().equals(binaryId)));
     }
 
     // --- 실패 ---
@@ -197,9 +209,32 @@ class BasicMessageServiceTest {
   @DisplayName("readMessageByChannel")
   class ReadMessageByChannel {
 
+    private Message messageAt(Instant createdAt) {
+      Message message = new Message(mockChannel, mockAuthor, "message at " + createdAt);
+      ReflectionTestUtils.setField(message, "createdAt", createdAt);
+      return message;
+    }
+
     @Test
-    @DisplayName("cursor가 null일 경우 최근 메시지부터 size + 1개를 조회")
-    void readMessagesByChannel_noCursor_success() {
+    @DisplayName("다음 페이지 존재 여부를 판단하기 위해 size + 1개를 조회")
+    void readMessagesByChannel_requestsSizePlusOne() {
+      // given
+      given(messageRepository.findByChannelIdOrderByCreatedAtDesc(eq(channelId), any(Limit.class)))
+          .willReturn(List.of());
+
+      // when
+      messageService.readMessagesByChannel(channelId, null, 10);
+
+      // then
+      ArgumentCaptor<Limit> captor = ArgumentCaptor.forClass(Limit.class);
+      then(messageRepository).should()
+          .findByChannelIdOrderByCreatedAtDesc(eq(channelId), captor.capture());
+      assertThat(captor.getValue().max()).isEqualTo(11);
+    }
+
+    @Test
+    @DisplayName("cursor가 null이고 조회 결과가 size 이하면 hasNext=false, nextCursor=null")
+    void readMessagesByChannel_noCursor_lastPage() {
       // given
       given(messageRepository.findByChannelIdOrderByCreatedAtDesc(eq(channelId), any(Limit.class)))
           .willReturn(List.of(mockMessage));
@@ -211,10 +246,33 @@ class BasicMessageServiceTest {
       // then
       assertThat(result.content()).hasSize(1);
       assertThat(result.hasNext()).isFalse();
+      assertThat(result.nextCursor()).isNull();
     }
 
     @Test
-    @DisplayName("corsor가 있을 경우 해당 시점 이전 메시지를 조회")
+    @DisplayName("조회 결과가 size보다 많으면 size개만 반환하고, 마지막 메시지의 createdAt을 nextCursor로 반환")
+    void readMessagesByChannel_hasNext_returnsSizeAndCursor() {
+      // given
+      Instant now = Instant.now();
+      Message m1 = messageAt(now);
+      Message m2 = messageAt(now.minusSeconds(1));
+      Message m3 = messageAt(now.minusSeconds(2));
+      given(messageRepository.findByChannelIdOrderByCreatedAtDesc(eq(channelId), any(Limit.class)))
+          .willReturn(List.of(m1, m2, m3));
+      given(messageMapper.toDto(any(Message.class))).willReturn(mockMessageDto);
+
+      // when
+      PageResponse<MessageDto> result = messageService.readMessagesByChannel(channelId, null, 2);
+
+      // then
+      assertThat(result.content()).hasSize(2);
+      assertThat(result.hasNext()).isTrue();
+      assertThat(result.nextCursor()).isEqualTo(m2.getCreatedAt());
+      then(messageMapper).should(never()).toDto(m3);
+    }
+
+    @Test
+    @DisplayName("cursor가 있을 경우 해당 시점 이전 메시지를 조회")
     void readMessageByChannel_withCursor_success() {
       // given
       Instant cursor = Instant.now();
@@ -255,7 +313,7 @@ class BasicMessageServiceTest {
     }
 
     @Test
-    @DisplayName("첨뷰파일이 있는 메시지 삭제 시 BinaryContent도 함께 삭제됨")
+    @DisplayName("첨부파일이 있는 메시지 삭제 시 BinaryContent도 함께 삭제됨")
     void deleteMessage_withAttachments_success() {
       // given
       BinaryContent binary = new BinaryContent("file.png", "image/png", 10L);
@@ -268,6 +326,7 @@ class BasicMessageServiceTest {
       messageService.deleteMessage(messageId);
 
       // then
+      then(messageAttachmentRepository).should().deleteAll(List.of(attachment));
       then(binaryContentRepository).should().deleteAll(List.of(binary));
       then(messageRepository).should().delete(mockMessage);
     }
@@ -296,22 +355,19 @@ class BasicMessageServiceTest {
     void updateMessage_success() {
       // given
       MessageUpdateRequest request = new MessageUpdateRequest("new message");
-      MessageDto updatedDto = new MessageDto(messageId, Instant.now(), Instant.now(), "new message",
-          channelId, mockUserDto,
-          Collections.emptyList());
       given(messageRepository.findById(messageId)).willReturn(Optional.of(mockMessage));
-      given(messageMapper.toDto(any(Message.class))).willReturn(updatedDto);
 
       // when
-      MessageDto result = messageService.updateMessage(messageId, request);
+      messageService.updateMessage(messageId, request);
 
       // then
-      assertThat(result.content()).isEqualTo("new message");
+      assertThat(mockMessage.getContent()).isEqualTo("new message");
+      then(messageMapper).should().toDto(mockMessage);
     }
 
     // --- 실패 ---
     @Test
-    @DisplayName("존재하지 하지 않는 messageId일 경우 MessageNotFoundException이 발생")
+    @DisplayName("존재하지 않는 messageId일 경우 MessageNotFoundException이 발생")
     void updateMessage_messageNotFound_throwsMessageNotFoundException() {
       // given
       given(messageRepository.findById(messageId)).willReturn(Optional.empty());
