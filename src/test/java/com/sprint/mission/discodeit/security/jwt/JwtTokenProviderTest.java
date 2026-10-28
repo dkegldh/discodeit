@@ -53,6 +53,17 @@ class JwtTokenProviderTest {
   }
 
   @Test
+  @DisplayName("같은 사용자에게 같은 시각에 발급해도 토큰은 서로 다름 (회전 후 이전 토큰과 구분)")
+  void tokensIssuedAtSameSecond_areUnique() {
+    String first = tokenProvider.createAccessToken(userId, "tester");
+    String second = tokenProvider.createAccessToken(userId, "tester");
+
+    assertThat(first).isNotEqualTo(second);
+    assertThat(tokenProvider.createRefreshToken(userId, "tester"))
+        .isNotEqualTo(tokenProvider.createRefreshToken(userId, "tester"));
+  }
+
+  @Test
   @DisplayName("만료된 토큰은 검증에 실패함")
   void expiredToken_isInvalid() {
     JwtTokenProvider expiredProvider = createProvider(SECRET, -1L);
