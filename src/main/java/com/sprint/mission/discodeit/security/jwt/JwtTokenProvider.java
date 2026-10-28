@@ -78,6 +78,8 @@ public class JwtTokenProvider {
 
     JWTClaimsSet.Builder claimsBuilder = new JWTClaimsSet.Builder()
         .subject(userId.toString())
+        // iat는 초 단위라 같은 초에 발급하면 토큰이 똑같아지므로, 토큰마다 고유 ID를 넣어 구분
+        .jwtID(UUID.randomUUID().toString())
         .issueTime(now)
         .expirationTime(expiry)
         .claim(CLAIM_TYPE, type);

@@ -9,6 +9,7 @@ import com.sprint.mission.discodeit.entity.Role;
 import com.sprint.mission.discodeit.entity.User;
 import com.sprint.mission.discodeit.repository.UserRepository;
 import jakarta.servlet.http.Cookie;
+import java.util.Arrays;
 import java.util.List;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -106,7 +107,11 @@ public abstract class AbstractIntegrationTest {
 
   protected RequestPostProcessor csrf() {
     return request -> {
-      request.setCookies(csrfCookie);
+      // setCookies는 기존 쿠키를 덮어쓰므로, 요청에 이미 담긴 쿠키(예: refresh token)를 유지한 채 추가
+      Cookie[] existing = request.getCookies() == null ? new Cookie[0] : request.getCookies();
+      Cookie[] cookies = Arrays.copyOf(existing, existing.length + 1);
+      cookies[existing.length] = csrfCookie;
+      request.setCookies(cookies);
       request.addHeader(CSRF_HEADER_NAME, csrfCookie.getValue());
       return request;
     };

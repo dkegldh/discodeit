@@ -27,6 +27,9 @@ repositories {
     mavenCentral()
 }
 
+// Boot 3.4.3이 관리하는 Testcontainers 1.20.x는 Docker Engine 29(최소 API 1.44)와 통신하지 못함
+ext['testcontainers.version'] = '1.21.4'
+
 dependencies {
     implementation 'org.springframework.boot:spring-boot-starter-web'
     implementation 'org.springdoc:springdoc-openapi-starter-webmvc-ui:2.8.4'
@@ -52,6 +55,7 @@ dependencies {
     annotationProcessor 'org.mapstruct:mapstruct-processor:1.5.5.Final'
     testImplementation 'org.springframework.boot:spring-boot-starter-test'
     testImplementation 'org.awaitility:awaitility'
+    testImplementation 'org.testcontainers:junit-jupiter'
     testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
 }
 
@@ -72,6 +76,18 @@ bootJar {
 test {
     useJUnitPlatform()
     finalizedBy jacocoTestReport
+
+    // CI 로그에서 건너뛴 테스트(예: Docker가 없어 skip된 Testcontainers 테스트)를 확인할 수 있도록 출력
+    testLogging {
+        events 'skipped', 'failed'
+        exceptionFormat 'full'
+    }
+    afterSuite { desc, result ->
+        if (!desc.parent) {
+            println "Tests: ${result.testCount}, passed: ${result.successfulTestCount}, " +
+                "failed: ${result.failedTestCount}, skipped: ${result.skippedTestCount}"
+        }
+    }
 }
 
 jacocoTestReport {
