@@ -117,16 +117,14 @@ class BasicMessageServiceTest {
     @DisplayName("첨부파일 없이 메시지 생성")
     void createMessage_withoutAttachments_success() {
       // given
-      CreateMessageRequest request = new CreateMessageRequest(
-          channelId, authorId, "test message"
-      );
+      CreateMessageRequest request = new CreateMessageRequest(channelId, "test message");
       given(channelRepository.findById(channelId)).willReturn(Optional.of(mockChannel));
       given(userRepository.findById(authorId)).willReturn(Optional.of(mockAuthor));
       given(messageRepository.save(any(Message.class))).willReturn(mockMessage);
       given(messageMapper.toDto(any(Message.class))).willReturn(mockMessageDto);
 
       // when
-      messageService.createMessage(request, null);
+      messageService.createMessage(authorId, request, null);
 
       // then
       ArgumentCaptor<Message> captor = ArgumentCaptor.forClass(Message.class);
@@ -143,9 +141,7 @@ class BasicMessageServiceTest {
     @DisplayName("첨부파일과 함께 메시지 생성")
     void createMessage_withAttachments_success() {
       // given
-      CreateMessageRequest request = new CreateMessageRequest(
-          channelId, authorId, "test message"
-      );
+      CreateMessageRequest request = new CreateMessageRequest(channelId, "test message");
       MockMultipartFile file = new MockMultipartFile(
           "file", "test.png", "image/png", "fake-bytes".getBytes()
       );
@@ -160,7 +156,7 @@ class BasicMessageServiceTest {
       given(messageMapper.toDto(any(Message.class))).willReturn(mockMessageDto);
 
       // when
-      messageService.createMessage(request, List.of(file));
+      messageService.createMessage(authorId, request, List.of(file));
 
       // then
       ArgumentCaptor<Message> captor = ArgumentCaptor.forClass(Message.class);
@@ -177,13 +173,11 @@ class BasicMessageServiceTest {
     @DisplayName("존재하지 않는 channelId일 경우 ChannelNotFoundException이 발생")
     void createMessage_channelNotFound_throwsChannelNotFoundException() {
       // given
-      CreateMessageRequest request = new CreateMessageRequest(
-          channelId, authorId, "test message"
-      );
+      CreateMessageRequest request = new CreateMessageRequest(channelId, "test message");
       given(channelRepository.findById(channelId)).willReturn(Optional.empty());
 
       // when & then
-      assertThatThrownBy(() -> messageService.createMessage(request, null))
+      assertThatThrownBy(() -> messageService.createMessage(authorId, request, null))
           .isInstanceOf(ChannelNotFoundException.class);
       then(messageRepository).should(never()).save(any());
     }
@@ -192,14 +186,12 @@ class BasicMessageServiceTest {
     @DisplayName("존재하지 않는 authorId일 경우 UserNotFoundException이 발생")
     void createMessage_userNotFound_throwsUserNotFoundException() {
       // given
-      CreateMessageRequest request = new CreateMessageRequest(
-          channelId, authorId, "test message"
-      );
+      CreateMessageRequest request = new CreateMessageRequest(channelId, "test message");
       given(channelRepository.findById(channelId)).willReturn(Optional.of(mockChannel));
       given(userRepository.findById(authorId)).willReturn(Optional.empty());
 
       // when & then
-      assertThatThrownBy(() -> messageService.createMessage(request, null))
+      assertThatThrownBy(() -> messageService.createMessage(authorId, request, null))
           .isInstanceOf(UserNotFoundException.class);
       then(messageRepository).should(never()).save(any());
     }

@@ -29,6 +29,7 @@ import com.sprint.mission.discodeit.repository.MessageRepository;
 import com.sprint.mission.discodeit.repository.NotificationRepository;
 import java.time.Duration;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -69,10 +70,9 @@ class MessageIntegrationTest extends AbstractIntegrationTest {
     accessToken = login("testUser");
   }
 
-  private MockMultipartFile messagePart(UUID channelId, UUID authorId, String content)
-      throws Exception {
+  private MockMultipartFile messagePart(UUID channelId, String content) throws Exception {
     return new MockMultipartFile("messageCreateRequest", "", MediaType.APPLICATION_JSON_VALUE,
-        objectMapper.writeValueAsBytes(new CreateMessageRequest(channelId, authorId, content)));
+        objectMapper.writeValueAsBytes(new CreateMessageRequest(channelId, content)));
   }
 
   // --- POST ---
@@ -80,7 +80,7 @@ class MessageIntegrationTest extends AbstractIntegrationTest {
   @DisplayName("유효한 요청으로 메시지 생성 시 201과 생성된 메시지 정보 반환")
   void createMessage_returns201() throws Exception {
     mockMvc.perform(multipart("/api/messages")
-            .file(messagePart(savedChannel.getId(), savedUser.getId(), "test"))
+            .file(messagePart(savedChannel.getId(), "test"))
             .with(auth(accessToken)))
         .andDo(print())
         .andExpect(status().isCreated())
@@ -90,10 +90,32 @@ class MessageIntegrationTest extends AbstractIntegrationTest {
   }
 
   @Test
+  @DisplayName("요청 바디에 다른 사용자의 authorId를 넣어도 작성자는 로그인한 사용자로 저장됨")
+  void createMessage_spoofedAuthorId_authorIsAuthenticatedUser() throws Exception {
+    User victim = saveUser("victim", Role.USER);
+    // 기존 클라이언트는 authorId를 함께 보내므로, 필드가 있어도 무시되는지 원시 JSON으로 검증
+    MockMultipartFile spoofedPart = new MockMultipartFile("messageCreateRequest", "",
+        MediaType.APPLICATION_JSON_VALUE, objectMapper.writeValueAsBytes(Map.of(
+        "channelId", savedChannel.getId(),
+        "authorId", victim.getId(),
+        "content", "사칭 메시지")));
+
+    mockMvc.perform(multipart("/api/messages").file(spoofedPart).with(auth(accessToken)))
+        .andExpect(status().isCreated())
+        .andExpect(jsonPath("$.author.id").value(savedUser.getId().toString()));
+
+    assertThat(messageRepository.findAll())
+        .filteredOn(message -> message.getContent().equals("사칭 메시지"))
+        .singleElement()
+        .satisfies(message ->
+            assertThat(message.getAuthor().getId()).isEqualTo(savedUser.getId()));
+  }
+
+  @Test
   @DisplayName("메시지 생성이 커밋되면 Kafka로 MessageCreatedEvent가 발행됨")
   void createMessage_publishesKafkaEventAfterCommit() throws Exception {
     mockMvc.perform(multipart("/api/messages")
-            .file(messagePart(savedChannel.getId(), savedUser.getId(), "test"))
+            .file(messagePart(savedChannel.getId(), "test"))
             .with(auth(accessToken)))
         .andExpect(status().isCreated());
 
@@ -117,7 +139,7 @@ class MessageIntegrationTest extends AbstractIntegrationTest {
 
     // when
     mockMvc.perform(multipart("/api/messages")
-            .file(messagePart(privateChannelId, savedUser.getId(), "안녕하세요"))
+            .file(messagePart(privateChannelId, "안녕하세요"))
             .with(auth(accessToken)))
         .andExpect(status().isCreated());
 
@@ -138,7 +160,7 @@ class MessageIntegrationTest extends AbstractIntegrationTest {
   @DisplayName("존재하지 않는 채널 ID로 메시지 생성 시 404를 반환")
   void createMessage_channelNotFound_returns404() throws Exception {
     mockMvc.perform(multipart("/api/messages")
-            .file(messagePart(UUID.randomUUID(), savedUser.getId(), "test"))
+            .file(messagePart(UUID.randomUUID(), "test"))
             .with(auth(accessToken)))
         .andDo(print())
         .andExpect(status().isNotFound())

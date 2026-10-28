@@ -4,6 +4,7 @@ import com.sprint.mission.discodeit.dto.message.CreateMessageRequest;
 import com.sprint.mission.discodeit.dto.message.MessageDto;
 import com.sprint.mission.discodeit.dto.message.MessageUpdateRequest;
 import com.sprint.mission.discodeit.dto.response.PageResponse;
+import com.sprint.mission.discodeit.security.DiscodeitUserDetails;
 import com.sprint.mission.discodeit.service.MessageService;
 import io.micrometer.core.annotation.Timed;
 import io.swagger.v3.oas.annotations.Parameter;
@@ -17,6 +18,7 @@ import org.springframework.data.domain.Pageable;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
@@ -37,10 +39,12 @@ public class MessageController {
   public ResponseEntity<MessageDto> createMessage(
       @Parameter(content = @Content(mediaType = MediaType.APPLICATION_JSON_VALUE))
       @Valid @RequestPart("messageCreateRequest") CreateMessageRequest request,
-      @RequestPart(value = "attachments", required = false) List<MultipartFile> attachments) {
+      @RequestPart(value = "attachments", required = false) List<MultipartFile> attachments,
+      @AuthenticationPrincipal DiscodeitUserDetails principal) {
     log.info("메시지 생성 요청 수신 - channelId: {}, attachmentCount: {}", request.channelId(),
         attachments != null ? attachments.size() : 0);
-    MessageDto createdMessage = messageService.createMessage(request, attachments);
+    MessageDto createdMessage = messageService.createMessage(principal.getUserDto().id(), request,
+        attachments);
     URI location = URI.create("/api/messages/" + createdMessage.id());
     log.info("메시지 생성 응답 완료 - messageId: {}", createdMessage.id());
     return ResponseEntity.created(location).body(createdMessage);
