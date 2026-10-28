@@ -1,6 +1,7 @@
 package com.sprint.mission.discodeit.security.jwt;
 
 import com.sprint.mission.discodeit.dto.user.UserOnlineStatusChangedEvent;
+import com.sprint.mission.discodeit.exception.auth.RefreshTokenInvalidException;
 import com.sprint.mission.discodeit.security.jwt.dto.JwtInformation;
 import java.time.Instant;
 import java.util.ArrayDeque;
@@ -84,9 +85,10 @@ public class InMemoryJwtRegistry implements JwtRegistry {
   public JwtInformation rotateJwtInformation(String oldRefreshToken,
       JwtInformation newJwtInformation) {
     Queue<JwtInformation> queue = origin.get(newJwtInformation.userId());
+    boolean rotated = false;
     if (queue != null) {
       synchronized (queue) {
-        queue.removeIf(info -> {
+        rotated = queue.removeIf(info -> {
           boolean match = info.refreshToken().equals(oldRefreshToken);
           if (match) {
             indexRemove(info);
@@ -94,6 +96,11 @@ public class InMemoryJwtRegistry implements JwtRegistry {
           return match;
         });
       }
+    }
+
+    // 다른 요청이 먼저 회전한 토큰이면 새 세션을 만들지 않는다 (RedisJwtRegistry와 동일)
+    if (!rotated) {
+      throw new RefreshTokenInvalidException();
     }
 
     registerJwtInformation(newJwtInformation);
