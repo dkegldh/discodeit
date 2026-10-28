@@ -59,7 +59,7 @@ CREATE TABLE IF NOT EXISTS read_statuses
     user_id      UUID                     NOT NULL REFERENCES users (id) ON DELETE CASCADE,
     channel_id   UUID                     NOT NULL REFERENCES channels (id) ON DELETE CASCADE,
     last_read_at TIMESTAMP WITH TIME ZONE NOT NULL,
-    notification_enabled
+    notification_enabled BOOLEAN              NOT NULL DEFAULT FALSE,
     UNIQUE (user_id, channel_id)
 );
 
