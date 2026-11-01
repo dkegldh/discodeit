@@ -17,8 +17,10 @@ import com.sprint.mission.discodeit.entity.BinaryContentStatus;
 import com.sprint.mission.discodeit.entity.Role;
 import com.sprint.mission.discodeit.entity.User;
 import com.sprint.mission.discodeit.repository.BinaryContentRepository;
+import com.sprint.mission.discodeit.repository.MessageRepository;
 import com.sprint.mission.discodeit.service.BinaryContentService;
 import java.time.Duration;
+import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
 import org.junit.jupiter.api.BeforeEach;
@@ -38,6 +40,9 @@ class CacheConsistencyIntegrationTest extends AbstractIntegrationTest {
 
   @Autowired
   private BinaryContentService binaryContentService;
+
+  @Autowired
+  private MessageRepository messageRepository;
 
   private User me;
   private User friend;
@@ -87,10 +92,14 @@ class CacheConsistencyIntegrationTest extends AbstractIntegrationTest {
             .with(auth(myToken)))
         .andExpect(status().isCreated())
         .andReturn().getResponse().getContentAsString();
-    String messageCreatedAt = objectMapper.readTree(messageBody).get("createdAt").asText();
+    UUID messageId = UUID.fromString(objectMapper.readTree(messageBody).get("id").asText());
     awaitAsyncEventListeners();
 
-    assertThat(myChannels().get(0).get("lastMessageAt").asText()).isEqualTo(messageCreatedAt);
+    // 응답의 createdAt은 저장 전 메모리 값이라 OS에 따라 나노초까지 있고, DB에는 마이크로초까지만 저장된다.
+    // 채널 목록은 DB 값을 쓰므로 DB에 저장된 메시지 시각과 비교한다.
+    Instant storedCreatedAt = messageRepository.findById(messageId).orElseThrow().getCreatedAt();
+    assertThat(Instant.parse(myChannels().get(0).get("lastMessageAt").asText()))
+        .isEqualTo(storedCreatedAt);
   }
 
   @Test
