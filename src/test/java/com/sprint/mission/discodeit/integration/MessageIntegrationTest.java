@@ -24,6 +24,7 @@ import com.sprint.mission.discodeit.entity.Message;
 import com.sprint.mission.discodeit.entity.Notification;
 import com.sprint.mission.discodeit.entity.Role;
 import com.sprint.mission.discodeit.entity.User;
+import com.sprint.mission.discodeit.event.listener.NotificationRequiredTopicListener;
 import com.sprint.mission.discodeit.repository.ChannelRepository;
 import com.sprint.mission.discodeit.repository.MessageRepository;
 import com.sprint.mission.discodeit.repository.NotificationRepository;
@@ -49,6 +50,9 @@ class MessageIntegrationTest extends AbstractIntegrationTest {
 
   @Autowired
   private NotificationRepository notificationRepository;
+
+  @Autowired
+  private NotificationRequiredTopicListener notificationTopicListener;
 
   private User savedUser;
   private Channel savedChannel;
@@ -124,7 +128,7 @@ class MessageIntegrationTest extends AbstractIntegrationTest {
   }
 
   @Test
-  @DisplayName("Private 채널에 메시지를 작성하면 커밋 이후 작성자를 제외한 참여자에게만 알림이 생성됨")
+  @DisplayName("Private 채널에 메시지를 작성하면 작성자를 제외한 참여자에게 알림이 한 번만 생성됨")
   void createMessage_privateChannel_notifiesOtherParticipants() throws Exception {
     // given
     User receiver = saveUser("receiver", Role.USER);
@@ -142,15 +146,18 @@ class MessageIntegrationTest extends AbstractIntegrationTest {
             .file(messagePart(privateChannelId, "안녕하세요"))
             .with(auth(accessToken)))
         .andExpect(status().isCreated());
+    // Kafka 브로커가 컨슈머에 메시지를 전달하는 것을 대신함
+    notificationTopicListener.onMessageCreatedEvent(
+        awaitKafkaPayload("discodeit.MessageCreatedEvent"));
+    awaitAsyncEventListeners();
 
     // then
-    await().atMost(Duration.ofSeconds(5)).untilAsserted(() ->
-        assertThat(notificationRepository.findAllByReceiverId(receiver.getId()))
-            .singleElement()
-            .satisfies(notification -> {
-              assertThat(notification.getTitle()).isEqualTo("testUser (#Private Channel)");
-              assertThat(notification.getContent()).isEqualTo("안녕하세요");
-            }));
+    assertThat(notificationRepository.findAllByReceiverId(receiver.getId()))
+        .singleElement()
+        .satisfies(notification -> {
+          assertThat(notification.getTitle()).isEqualTo("testUser (#Private Channel)");
+          assertThat(notification.getContent()).isEqualTo("안녕하세요");
+        });
     assertThat(notificationRepository.findAllByReceiverId(savedUser.getId()))
         .extracting(Notification::getContent)
         .doesNotContain("안녕하세요");
