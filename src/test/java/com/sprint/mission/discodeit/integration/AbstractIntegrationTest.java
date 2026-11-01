@@ -1,5 +1,9 @@
 package com.sprint.mission.discodeit.integration;
 
+import static org.awaitility.Awaitility.await;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.timeout;
+import static org.mockito.Mockito.verify;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -9,17 +13,22 @@ import com.sprint.mission.discodeit.entity.Role;
 import com.sprint.mission.discodeit.entity.User;
 import com.sprint.mission.discodeit.repository.UserRepository;
 import jakarta.servlet.http.Cookie;
+import java.time.Duration;
 import java.util.Arrays;
 import java.util.List;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
+import org.mockito.ArgumentCaptor;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.cache.CacheManager;
 import org.springframework.http.HttpHeaders;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.core.task.TaskExecutor;
 import org.springframework.kafka.core.KafkaTemplate;
+import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
@@ -65,6 +74,10 @@ public abstract class AbstractIntegrationTest {
   @Autowired
   private CacheManager cacheManager;
 
+  @Autowired
+  @Qualifier("eventTaskExecutor")
+  private TaskExecutor eventTaskExecutor;
+
   // 외부 브로커 없이 실행하기 위해 대체하고, 발행 여부는 이 Mock으로 검증한다
   @MockitoBean
   protected KafkaTemplate<String, String> kafkaTemplate;
@@ -103,6 +116,26 @@ public abstract class AbstractIntegrationTest {
         .andReturn();
     return objectMapper.readTree(result.getResponse().getContentAsString())
         .get("accessToken").asText();
+  }
+
+  /**
+   * 커밋 이후 Kafka로 발행된 메시지를 반환한다. 테스트에는 브로커가 없으므로, 이 값을 {@code @KafkaListener} 메서드에
+   * 직접 넘겨 컨슈머 전달을 대신한다.
+   */
+  protected String awaitKafkaPayload(String topic) {
+    ArgumentCaptor<String> captor = ArgumentCaptor.forClass(String.class);
+    verify(kafkaTemplate, timeout(5000)).send(eq(topic), captor.capture());
+    return captor.getValue();
+  }
+
+  /**
+   * {@code eventTaskExecutor}에서 실행되는 비동기 이벤트 리스너가 모두 끝날 때까지 기다린다. "N개만 생성됨"처럼 나중에 더
+   * 생기지 않는다는 것을 확인할 때 사용한다.
+   */
+  protected void awaitAsyncEventListeners() {
+    ThreadPoolTaskExecutor executor = (ThreadPoolTaskExecutor) eventTaskExecutor;
+    await().atMost(Duration.ofSeconds(5)).until(() -> executor.getActiveCount() == 0
+        && executor.getThreadPoolExecutor().getQueue().isEmpty());
   }
 
   protected RequestPostProcessor csrf() {
