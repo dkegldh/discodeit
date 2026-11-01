@@ -27,7 +27,6 @@ import com.sprint.mission.discodeit.service.ChannelService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.cache.annotation.CacheEvict;
-import org.springframework.cache.annotation.Cacheable;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.stereotype.Service;
@@ -51,6 +50,7 @@ public class BasicChannelService implements ChannelService {
   private final UserMapper userMapper;
   private final ChannelMapper channelMapper;
   private final ApplicationEventPublisher applicationEventPublisher;
+  private final VisibleChannelsReader visibleChannelsReader;
 
   @Override
   @Transactional
@@ -135,50 +135,21 @@ public class BasicChannelService implements ChannelService {
   }
 
   @Override
-  @Cacheable(cacheNames = "channels", key = "#userId")
   public List<ChannelDto> findAllByUserId(UUID userId) {
-    List<Channel> allChannels = channelRepository.findAll();
+    // 채널/참여자는 캐시에서, 메시지마다 바뀌는 마지막 메시지 시각은 매번 DB에서 가져온다
+    List<ChannelDto> channels = visibleChannelsReader.read(userId);
 
-    Set<UUID> joinChannelIds = readStatusRepository.findAllByUserId(userId).stream()
-        .map(rs -> rs.getChannel().getId())
-        .collect(Collectors.toSet());
-
-    List<Channel> targetChannels = allChannels.stream()
-        .filter(c -> c.getType() == ChannelType.PUBLIC || joinChannelIds.contains(c.getId()))
+    List<UUID> channelIds = channels.stream()
+        .map(ChannelDto::id)
         .toList();
-
-    List<UUID> targetChannelIds = targetChannels.stream()
-        .map(Channel::getId)
-        .toList();
-
-    List<Message> latestMessages = messageRepository.findLatestMessagesByChannelIds(
-        targetChannelIds);
-    Map<UUID, Instant> lastestMessageMap = latestMessages.stream()
+    Map<UUID, Instant> lastMessageAtMap = messageRepository.findLatestMessagesByChannelIds(
+            channelIds).stream()
         .collect(Collectors.toMap(m -> m.getChannel().getId(), Message::getCreatedAt,
             (existing, replacement) -> existing));
 
-    List<UUID> privateChannelIds = targetChannels.stream()
-        .filter(c -> c.getType() == ChannelType.PRIVATE)
-        .map(Channel::getId)
-        .toList();
-    Map<UUID, List<UserDto>> participantMap = readStatusRepository.findAllByChannelIdIn(
-            privateChannelIds).stream()
-        .collect(Collectors.groupingBy((ReadStatus rs) -> rs.getChannel().getId(),
-            Collectors.mapping(
-                (ReadStatus rs) -> userMapper.toDto(rs.getUser(), false),
-                Collectors.toList()
-            )
-        ));
-
-    return targetChannels.stream()
-        .map(channel -> {
-          Instant lastMessageAt = lastestMessageMap.getOrDefault(channel.getId(),
-              channel.getCreatedAt());
-          List<UserDto> participants = participantMap.getOrDefault(channel.getId(),
-              Collections.emptyList());
-
-          return channelMapper.toDto(channel, lastMessageAt, participants);
-        })
+    return channels.stream()
+        .map(c -> new ChannelDto(c.id(), c.name(), c.type(), c.description(),
+            lastMessageAtMap.getOrDefault(c.id(), c.lastMessageAt()), c.participants()))
         .sorted(Comparator.comparing(ChannelDto::lastMessageAt).reversed())
         .toList();
   }

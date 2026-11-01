@@ -20,6 +20,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Service;
 
 import java.util.*;
+import org.springframework.cache.annotation.CacheEvict;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -101,6 +102,9 @@ public class BasicBinaryContentService implements BinaryContentService {
 
   @Override
   @Transactional(propagation = Propagation.REQUIRES_NEW)
+  // 프로필 이미지라면 사용자 목록과 채널 참여자 정보에 상태가 들어 있으므로 캐시를 비운다
+  @CacheEvict(cacheNames = {"users", "channels"}, allEntries = true,
+      condition = "@userRepository.existsByProfileId(#binaryContentId)")
   public void updateStatus(UUID binaryContentId, BinaryContentStatus status) {
     binaryContentRepository.findById(binaryContentId)
         .ifPresentOrElse(
