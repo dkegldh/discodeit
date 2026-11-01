@@ -131,7 +131,8 @@ public class BasicUserService implements UserService {
   @Override
   @Transactional
   @PreAuthorize("#id == authentication.principal.userDto.id()")
-  @CacheEvict(cacheNames = "users", allEntries = true)
+  // 채널 목록 캐시의 참여자 정보에도 사용자 정보가 들어 있으므로 함께 비운다
+  @CacheEvict(cacheNames = {"users", "channels"}, allEntries = true)
   public void deleteUser(UUID id) {
     log.debug("사용자 삭제 비즈니스 로직 시작 - userId: {}", id);
     User user = userRepository.findById(id)
@@ -159,7 +160,8 @@ public class BasicUserService implements UserService {
   @Override
   @Transactional
   @PreAuthorize("#id == authentication.principal.userDto.id()")
-  @CacheEvict(cacheNames = "users", allEntries = true)
+  // 채널 목록 캐시의 참여자 정보에도 사용자 정보가 들어 있으므로 함께 비운다
+  @CacheEvict(cacheNames = {"users", "channels"}, allEntries = true)
   public UserDto updateUser(UUID id, UserUpdateRequest request, MultipartFile profile) {
     log.debug("사용자 업데이트 비즈니스 로직 시작 - updateName: {}, updateEmail: {}", request.newUsername(),
         request.newEmail());
@@ -228,7 +230,8 @@ public class BasicUserService implements UserService {
   @Override
   @Transactional
   @PreAuthorize("hasRole('ADMIN')")
-  @CacheEvict(cacheNames = "users", allEntries = true)
+  // 채널 목록 캐시의 참여자 정보에도 사용자 정보가 들어 있으므로 함께 비운다
+  @CacheEvict(cacheNames = {"users", "channels"}, allEntries = true)
   public UserDto updateRole(RoleUpdateRequest request) {
     User user = userRepository.findById(request.userId())
         .orElseThrow(() -> {

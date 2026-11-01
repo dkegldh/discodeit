@@ -17,6 +17,7 @@ import com.sprint.mission.discodeit.repository.ReadStatusRepository;
 import com.sprint.mission.discodeit.repository.UserRepository;
 import com.sprint.mission.discodeit.service.ReadStatusService;
 import lombok.RequiredArgsConstructor;
+import org.springframework.cache.annotation.CacheEvict;
 import org.springframework.stereotype.Service;
 
 import java.time.Instant;
@@ -37,6 +38,8 @@ public class BasicReadStatusService implements ReadStatusService {
 
   @Override
   @Transactional
+  // 채널 참여 여부와 참여자 목록이 바뀌므로 채널 목록 캐시를 비운다
+  @CacheEvict(cacheNames = "channels", allEntries = true)
   public ReadStatusDto createReadStatus(ReadStatusCreateRequest request) {
     User user = userRepository.findById(request.userId())
         .orElseThrow(() -> new UserNotFoundException(request.userId()));
@@ -72,6 +75,8 @@ public class BasicReadStatusService implements ReadStatusService {
 
   @Override
   @Transactional
+  // 채널 참여 여부와 참여자 목록이 바뀌므로 채널 목록 캐시를 비운다
+  @CacheEvict(cacheNames = "channels", allEntries = true)
   public void deleteReadStatus(UUID id) {
     ReadStatus status = readStatusRepository.findById(id)
         .orElseThrow(() -> new ReadStatusNotFoundException(id));

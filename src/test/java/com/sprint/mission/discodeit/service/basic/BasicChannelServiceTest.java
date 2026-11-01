@@ -69,6 +69,9 @@ class BasicChannelServiceTest {
   @Mock
   private ApplicationEventPublisher applicationEventPublisher;
 
+  @Mock
+  private VisibleChannelsReader visibleChannelsReader;
+
   private BasicChannelService channelService;
 
   private UUID channelId;
@@ -82,7 +85,8 @@ class BasicChannelServiceTest {
   @BeforeEach
   void setUp() {
     channelService = new BasicChannelService(channelRepository, readStatusRepository,
-        messageRepository, userRepository, userMapper, channelMapper, applicationEventPublisher);
+        messageRepository, userRepository, userMapper, channelMapper, applicationEventPublisher,
+        visibleChannelsReader);
 
     channelId = UUID.randomUUID();
     userId = UUID.randomUUID();
@@ -189,108 +193,52 @@ class BasicChannelServiceTest {
   @DisplayName("findAllByUserId()")
   class FindAllByUserId {
 
-    // --- 성공 ---
-    @Test
-    @DisplayName("Public 채널은 모두 유저가 반환됨")
-    void findAllByUserId_publicChannelIncluded() {
-      // given
-      given(channelRepository.findAll()).willReturn(List.of(mockPublicChannel));
-      given(readStatusRepository.findAllByUserId(userId)).willReturn(Collections.emptyList());
-      given(messageRepository.findLatestMessagesByChannelIds(any())).willReturn(
-          Collections.emptyList());
-      given(readStatusRepository.findAllByChannelIdIn(any())).willReturn(Collections.emptyList());
-      given(channelMapper.toDto(any(Channel.class), nullable(Instant.class), any())).willReturn(
-          mockChannelDto);
+    private ChannelDto cachedChannel(Instant createdAt) {
+      // VisibleChannelsReader(캐시)는 lastMessageAt에 채널 생성 시각을 담아 반환한다
+      return new ChannelDto(UUID.randomUUID(), "channel", ChannelType.PUBLIC, "", createdAt,
+          List.of());
+    }
 
-      // when
-      List<ChannelDto> result = channelService.findAllByUserId(userId);
-
-      // then
-      assertThat(result).hasSize(1);
-      assertThat(result.get(0).type()).isEqualTo(ChannelType.PUBLIC);
+    private Message messageAt(ChannelDto channel, Instant createdAt) {
+      Channel entity = new Channel(channel.name(), channel.description(), channel.type());
+      ReflectionTestUtils.setField(entity, "id", channel.id());
+      Message message = new Message(entity, mockUser, "message");
+      ReflectionTestUtils.setField(message, "createdAt", createdAt);
+      return message;
     }
 
     @Test
-    @DisplayName("참여 중인 Private 채널은 참여자 목록과 함께 반환됨")
-    void findAllByUserId_privateChannel_participant() {
-      // given
-      ReadStatus readStatus = new ReadStatus(mockUser, mockPrivateChannel, Instant.now(), true);
-      given(channelRepository.findAll()).willReturn(List.of(mockPrivateChannel));
-      given(readStatusRepository.findAllByUserId(userId)).willReturn(List.of(readStatus));
-      given(messageRepository.findLatestMessagesByChannelIds(any())).willReturn(
-          Collections.emptyList());
-      given(readStatusRepository.findAllByChannelIdIn(List.of(channelId)))
-          .willReturn(List.of(readStatus));
-      given(userMapper.toDto(mockUser, false)).willReturn(mockUserDto);
-      givenChannelMapperBuildsDtoFromArguments();
-
-      // when
-      List<ChannelDto> result = channelService.findAllByUserId(userId);
-
-      // then
-      assertThat(result).hasSize(1);
-      assertThat(result.get(0).type()).isEqualTo(ChannelType.PRIVATE);
-      assertThat(result.get(0).participants()).containsExactly(mockUserDto);
-    }
-
-    @Test
-    @DisplayName("채널 목록은 마지막 메시지 시각(없으면 채널 생성 시각) 기준 내림차순으로 정렬됨")
-    void findAllByUserId_sortedByLastMessageAtDesc() {
+    @DisplayName("캐시된 채널 목록에 최신 메시지 시각을 매번 새로 조회해 채우고, 그 시각의 내림차순으로 정렬함")
+    void findAllByUserId_fillsLastMessageAtFreshAndSorts() {
       // given
       Instant now = Instant.now();
-      Channel oldChannelWithNewMessage = publicChannelCreatedAt(now.minusSeconds(300));
-      Channel newChannelWithoutMessage = publicChannelCreatedAt(now.minusSeconds(100));
-      Message latest = new Message(oldChannelWithNewMessage, mockUser, "latest");
-      ReflectionTestUtils.setField(latest, "createdAt", now);
-
-      given(channelRepository.findAll())
+      ChannelDto oldChannelWithNewMessage = cachedChannel(now.minusSeconds(300));
+      ChannelDto newChannelWithoutMessage = cachedChannel(now.minusSeconds(100));
+      given(visibleChannelsReader.read(userId))
           .willReturn(List.of(newChannelWithoutMessage, oldChannelWithNewMessage));
-      given(readStatusRepository.findAllByUserId(userId)).willReturn(Collections.emptyList());
-      given(messageRepository.findLatestMessagesByChannelIds(any())).willReturn(List.of(latest));
-      given(readStatusRepository.findAllByChannelIdIn(any())).willReturn(Collections.emptyList());
-      givenChannelMapperBuildsDtoFromArguments();
+      given(messageRepository.findLatestMessagesByChannelIds(
+          List.of(newChannelWithoutMessage.id(), oldChannelWithNewMessage.id())))
+          .willReturn(List.of(messageAt(oldChannelWithNewMessage, now)));
 
       // when
       List<ChannelDto> result = channelService.findAllByUserId(userId);
 
       // then
       assertThat(result).extracting(ChannelDto::id)
-          .containsExactly(oldChannelWithNewMessage.getId(), newChannelWithoutMessage.getId());
+          .containsExactly(oldChannelWithNewMessage.id(), newChannelWithoutMessage.id());
       assertThat(result.get(0).lastMessageAt()).isEqualTo(now);
+      // 메시지가 없는 채널은 채널 생성 시각 유지
       assertThat(result.get(1).lastMessageAt()).isEqualTo(now.minusSeconds(100));
     }
 
-    private Channel publicChannelCreatedAt(Instant createdAt) {
-      Channel channel = new Channel("channel", "", ChannelType.PUBLIC);
-      ReflectionTestUtils.setField(channel, "id", UUID.randomUUID());
-      ReflectionTestUtils.setField(channel, "createdAt", createdAt);
-      return channel;
-    }
-
-    private void givenChannelMapperBuildsDtoFromArguments() {
-      given(channelMapper.toDto(any(Channel.class), nullable(Instant.class), any()))
-          .willAnswer(inv -> {
-            Channel c = inv.getArgument(0);
-            return new ChannelDto(c.getId(), c.getName(), c.getType(), c.getDescription(),
-                inv.getArgument(1), inv.getArgument(2));
-          });
-    }
-
     @Test
-    @DisplayName("Private 채널은 참여하지 않으면 반환되지 않음")
-    void findAllByUserId_privateChannel_notParticipant() {
+    @DisplayName("볼 수 있는 채널이 없으면 빈 목록을 반환함")
+    void findAllByUserId_noChannels_empty() {
       // given
-      given(channelRepository.findAll()).willReturn(List.of(mockPrivateChannel));
-      given(readStatusRepository.findAllByUserId(userId)).willReturn(Collections.emptyList());
-      given(messageRepository.findLatestMessagesByChannelIds(any())).willReturn(
-          Collections.emptyList());
-      given(readStatusRepository.findAllByChannelIdIn(any())).willReturn(Collections.emptyList());
+      given(visibleChannelsReader.read(userId)).willReturn(List.of());
 
-      // when
-      List<ChannelDto> result = channelService.findAllByUserId(userId);
-
-      // then
-      assertThat(result).isEmpty();
+      // when & then
+      assertThat(channelService.findAllByUserId(userId)).isEmpty();
     }
   }
 
