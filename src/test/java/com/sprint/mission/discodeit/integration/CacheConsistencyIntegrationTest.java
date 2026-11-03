@@ -10,7 +10,6 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import com.fasterxml.jackson.databind.JsonNode;
 import com.sprint.mission.discodeit.dto.channel.PrivateChannelRequest;
 import com.sprint.mission.discodeit.dto.message.CreateMessageRequest;
-import com.sprint.mission.discodeit.dto.readstatus.ReadStatusCreateRequest;
 import com.sprint.mission.discodeit.dto.user.UserCreateRequest;
 import com.sprint.mission.discodeit.dto.user.UserUpdateRequest;
 import com.sprint.mission.discodeit.entity.BinaryContentStatus;
@@ -121,23 +120,6 @@ class CacheConsistencyIntegrationTest extends AbstractIntegrationTest {
 
     assertThat(myChannels().get(0).get("participants").findValuesAsText("username"))
         .containsExactlyInAnyOrder("me", "renamed");
-  }
-
-  @Test
-  @DisplayName("채널 목록을 조회한 뒤 채널에 참여자가 추가되면, 다시 조회했을 때 새 참여자가 보임")
-  void channelList_reflectsNewParticipant() throws Exception {
-    myChannels();
-    User newcomer = saveUser("newcomer", Role.USER);
-
-    mockMvc.perform(post("/api/readStatuses")
-            .contentType(MediaType.APPLICATION_JSON)
-            .content(objectMapper.writeValueAsString(
-                new ReadStatusCreateRequest(newcomer.getId(), privateChannelId)))
-            .with(auth(myToken)))
-        .andExpect(status().isCreated());
-
-    assertThat(myChannels().get(0).get("participants").findValuesAsText("username"))
-        .containsExactlyInAnyOrder("me", "friend", "newcomer");
   }
 
   @Test

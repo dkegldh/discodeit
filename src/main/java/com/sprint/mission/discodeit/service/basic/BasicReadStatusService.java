@@ -41,6 +41,9 @@ public class BasicReadStatusService implements ReadStatusService {
   @Transactional
   // 채널 참여 여부와 참여자 목록이 바뀌므로 채널 목록 캐시를 비운다
   @CacheEvict(cacheNames = "channels", allEntries = true)
+  // 본인 것만, 볼 수 있는 채널(Public 또는 이미 참여 중인 Private)에만 만들 수 있다
+  @PreAuthorize("#request.userId() == authentication.principal.userDto.id()"
+      + " and @channelSecurityService.canAccess(#request.channelId(), #request.userId())")
   public ReadStatusDto createReadStatus(ReadStatusCreateRequest request) {
     User user = userRepository.findById(request.userId())
         .orElseThrow(() -> new UserNotFoundException(request.userId()));
@@ -88,6 +91,7 @@ public class BasicReadStatusService implements ReadStatusService {
 
   @Override
   @Transactional
+  @PreAuthorize("@channelSecurityService.isReadStatusOwner(#readStatusId, authentication.principal.userDto.id())")
   public ReadStatusDto updateStatus(UUID readStatusId, ReadStatusUpdateRequest request) {
     ReadStatus readStatus = readStatusRepository.findById(readStatusId)
         .orElseThrow(() -> new ReadStatusNotFoundException(readStatusId));

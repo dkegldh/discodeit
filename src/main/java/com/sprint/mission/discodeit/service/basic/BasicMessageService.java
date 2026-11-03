@@ -58,6 +58,7 @@ public class BasicMessageService implements MessageService {
 
   @Override
   @Transactional
+  @PreAuthorize("@channelSecurityService.canAccess(#request.channelId(), #authorId)")
   public MessageDto createMessage(UUID authorId, CreateMessageRequest request,
       List<MultipartFile> attachments) {
     log.debug("메시지 생성 비즈니스 로직 시작 - channelId: {}, authorId: {}", request.channelId(),
@@ -123,6 +124,7 @@ public class BasicMessageService implements MessageService {
   }
 
   @Override
+  @PreAuthorize("@channelSecurityService.canAccess(#channelId, authentication.principal.userDto.id())")
   public PageResponse<MessageDto> readMessagesByChannel(UUID channelId, Instant cursor, int size) {
     Limit limit = Limit.of(size + 1);
 
