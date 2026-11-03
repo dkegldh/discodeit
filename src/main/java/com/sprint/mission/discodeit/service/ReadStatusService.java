@@ -13,7 +13,7 @@ public interface ReadStatusService {
 
   ReadStatusDto findById(UUID id);
 
-  List<ReadStatusDto> findAllByUserId(UUID authorId);
+  List<ReadStatusDto> findAllByUserId(UUID userId);
 
   void deleteReadStatus(UUID id);
 
