@@ -18,6 +18,7 @@ import com.sprint.mission.discodeit.repository.UserRepository;
 import com.sprint.mission.discodeit.service.ReadStatusService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.cache.annotation.CacheEvict;
+import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.stereotype.Service;
 
 import java.time.Instant;
@@ -67,8 +68,9 @@ public class BasicReadStatusService implements ReadStatusService {
   }
 
   @Override
-  public List<ReadStatusDto> findAllByUserId(UUID authorId) {
-    return readStatusRepository.findAllByUserId(authorId).stream()
+  @PreAuthorize("#userId == authentication.principal.userDto.id()")
+  public List<ReadStatusDto> findAllByUserId(UUID userId) {
+    return readStatusRepository.findAllByUserId(userId).stream()
         .map(readStatusMapper::toDto)
         .toList();
   }

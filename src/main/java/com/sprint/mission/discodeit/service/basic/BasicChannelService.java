@@ -135,6 +135,7 @@ public class BasicChannelService implements ChannelService {
   }
 
   @Override
+  @PreAuthorize("#userId == authentication.principal.userDto.id()")
   public List<ChannelDto> findAllByUserId(UUID userId) {
     // 채널/참여자는 캐시에서, 메시지마다 바뀌는 마지막 메시지 시각은 매번 DB에서 가져온다
     List<ChannelDto> channels = visibleChannelsReader.read(userId);

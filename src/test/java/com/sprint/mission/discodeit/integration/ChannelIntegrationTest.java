@@ -2,6 +2,7 @@ package com.sprint.mission.discodeit.integration;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultHandlers.print;
@@ -108,6 +109,25 @@ class ChannelIntegrationTest extends AbstractIntegrationTest {
         .andDo(print())
         .andExpect(status().isNotFound())
         .andExpect(jsonPath("$.code").value("USER_NOT_FOUND"));
+  }
+
+  // --- GET ---
+  @Test
+  @DisplayName("자신의 채널 목록을 조회하면 200을 반환")
+  void readOwnChannels_returns200() throws Exception {
+    mockMvc.perform(get("/api/channels").param("userId", savedUser.getId().toString())
+            .with(auth(accessToken)))
+        .andExpect(status().isOk());
+  }
+
+  @Test
+  @DisplayName("다른 사용자의 채널 목록을 조회하면 403을 반환")
+  void readOtherUsersChannels_returns403() throws Exception {
+    User other = saveUser("other", Role.USER);
+
+    mockMvc.perform(get("/api/channels").param("userId", other.getId().toString())
+            .with(auth(accessToken)))
+        .andExpect(status().isForbidden());
   }
 
   // --- DELETE ---
