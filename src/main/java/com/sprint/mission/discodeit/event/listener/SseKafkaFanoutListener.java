@@ -1,6 +1,7 @@
 package com.sprint.mission.discodeit.event.listener;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.sprint.mission.discodeit.dto.channel.ChannelDto;
 import com.sprint.mission.discodeit.dto.notification.NotificationDto;
@@ -70,9 +71,18 @@ public class SseKafkaFanoutListener {
         dto -> sseService.broadcast("users.deleted", dto));
   }
 
+  /**
+   * Kafka 메시지는 KafkaProduceRequiredEventListener가 보낸 이벤트 전체({"data": ..., "createdAt": ...})이므로
+   * 실제 내용인 data를 꺼내 읽는다. 형식이 맞지 않는 메시지는 재시도해도 같으므로 로그만 남기고 건너뛴다.
+   */
   private <T> void readAndHandle(String json, Class<T> type, Consumer<T> handler) {
     try {
-      handler.accept(objectMapper.readValue(json, type));
+      JsonNode data = objectMapper.readTree(json).get("data");
+      if (data == null || data.isNull()) {
+        log.error("SSE Kafka 이벤트에 data가 없음 - type: {}", type.getSimpleName());
+        return;
+      }
+      handler.accept(objectMapper.treeToValue(data, type));
     } catch (JsonProcessingException e) {
       log.error("SSE Kafka 이벤트 역직렬화 실패 - type: {}", type.getSimpleName(), e);
     }
